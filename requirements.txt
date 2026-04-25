@@ -1,0 +1,8 @@
+customtkinter
+cellpose
+torch
+torchvision
+pandas
+opencv-python
+scikit-image
+numpy

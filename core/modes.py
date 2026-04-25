@@ -1,0 +1,1 @@
+# Analysis modes (Brightfield, FDA, Nile Red)
