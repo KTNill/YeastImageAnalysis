@@ -2,188 +2,147 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import os
 import threading
-import time
-import cv2
 import datetime
+import cv2
 import pandas as pd
+from core.analyzer import YeastAnalyzer
 
-# 見た目の設定
-ctk.set_appearance_mode("dark")  # "light" も可能
+ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
+
 class App(ctk.CTk):
+    """
+    アプリケーションのGUIクラス。画像フォルダの読み込みと解析実行。
+    """
+
     def __init__(self):
         super().__init__()
+        self.analyzer = None
+        self.config_data = None
+        self.target_path = ""
 
-        # ウィンドウ設定
-        self.title("酵母画像解析システム - Yeast Analysis App")
+        self.title("酵母・油脂 解析システム")
         self.geometry("900x700")
 
-        # グリッド構成
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
-        # --- サイドバー (設定・フォルダ選択) ---
+        # UIコンポーネント配置
         self.sidebar_frame = ctk.CTkFrame(self, width=200, corner_radius=0)
         self.sidebar_frame.grid(row=0, column=0, rowspan=3, sticky="nsew")
 
-        self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="解析設定", font=ctk.CTkFont(size=20, weight="bold"))
+        self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="操作メニュー",
+                                       font=ctk.CTkFont(size=20, weight="bold"))
         self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
 
-        self.select_button = ctk.CTkButton(self.sidebar_frame, text="画像フォルダを選択", command=self.browse_folder)
+        self.select_button = ctk.CTkButton(self.sidebar_frame, text="フォルダを選択", command=self.select_folder)
         self.select_button.grid(row=1, column=0, padx=20, pady=10)
 
-        self.folder_label = ctk.CTkLabel(self.sidebar_frame, text="フォルダ未選択", wraplength=160, text_color="gray")
-        self.folder_label.grid(row=2, column=0, padx=20, pady=5)
+        self.run_cell_var = ctk.BooleanVar(value=True)
+        self.cell_check = ctk.CTkCheckBox(self.sidebar_frame, text="細胞解析 (BF)", variable=self.run_cell_var)
+        self.cell_check.grid(row=2, column=0, padx=20, pady=10, sticky="w")
 
-        # --- メインエリア (上部：モード選択) ---
-        self.mode_frame = ctk.CTkFrame(self, corner_radius=10)
-        self.mode_frame.grid(row=0, column=1, padx=20, pady=(20, 10), sticky="nsew")
+        self.run_lipid_var = ctk.BooleanVar(value=True)
+        self.lipid_check = ctk.CTkCheckBox(self.sidebar_frame, text="油脂解析 (FL)", variable=self.run_lipid_var)
+        self.lipid_check.grid(row=3, column=0, padx=20, pady=10, sticky="w")
 
-        self.mode_label = ctk.CTkLabel(self.mode_frame, text="解析モードを選択してください", font=ctk.CTkFont(size=14))
-        self.mode_label.pack(pady=10)
+        self.start_button = ctk.CTkButton(self.sidebar_frame, text="解析開始", command=self.start_analysis_thread,
+                                          fg_color="green", hover_color="darkgreen")
+        self.start_button.grid(row=4, column=0, padx=20, pady=20)
 
-        self.button_frame = ctk.CTkFrame(self.mode_frame, fg_color="transparent")
-        self.button_frame.pack(pady=10)
+        self.log_text = ctk.CTkTextbox(self, width=600)
+        self.log_text.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
 
-        self.bf_btn = ctk.CTkButton(self.button_frame, text="透過光 (BF)", width=150, height=50,
-                                     command=lambda: self.start_analysis("透過光"))
-        self.bf_btn.pack(side="left", padx=10)
-
-        self.fda_btn = ctk.CTkButton(self.button_frame, text="FDA (生死)", width=150, height=50,
-                                      command=lambda: self.start_analysis("FDA"))
-        self.fda_btn.pack(side="left", padx=10)
-
-        self.nr_btn = ctk.CTkButton(self.button_frame, text="ナイルレッド (油脂)", width=150, height=50,
-                                     command=lambda: self.start_analysis("ナイルレッド"), fg_color="#E91E63", hover_color="#C2185B")
-        self.nr_btn.pack(side="left", padx=10)
-
-        # --- メインエリア (中央：ログ表示) ---
-        self.log_textbox = ctk.CTkTextbox(self, width=600, corner_radius=10)
-        self.log_textbox.grid(row=1, column=1, padx=20, pady=10, sticky="nsew")
-        self.log_textbox.insert("0.0", "--- 解析ログ ---\nフォルダを選択して解析モードをクリックしてください。\n")
-
-        # --- 下部 (プログレスバー) ---
-        self.status_frame = ctk.CTkFrame(self, height=50, corner_radius=0)
-        self.status_frame.grid(row=2, column=1, sticky="ew")
-
-        self.progressbar = ctk.CTkProgressBar(self.status_frame, width=500)
-        self.progressbar.grid(row=0, column=0, padx=20, pady=15)
+        self.progressbar = ctk.CTkProgressBar(self)
+        self.progressbar.grid(row=2, column=1, padx=20, pady=(0, 20), sticky="ew")
         self.progressbar.set(0)
 
-        self.status_label = ctk.CTkLabel(self.status_frame, text="待機中")
-        self.status_label.grid(row=0, column=1, padx=20)
-
-        # 内部変数
-        self.target_path = ""
-        self.config_data = {"cell_diameter": 30} # 解析用の設定値
-        self.analyzer = None # 実際の解析クラスをここに割り当てる想定
-
-    def browse_folder(self):
-        """フォルダ選択ダイアログを開く"""
-        # parent=self を指定することで、メインウィンドウに関連付けます
-        path = filedialog.askdirectory(
-            parent=self,
-            title="解析対象の画像フォルダを選択してください"
-        )
-
+    def select_folder(self):
+        path = filedialog.askdirectory()
         if path:
-            # パスが選択された場合、ウィンドウを一度前面に持ってくる
-            self.focus_force()
             self.target_path = path
-            self.folder_label.configure(text=f"選択中:\n{os.path.basename(path)}", text_color="white")
-            self.update_log(f"フォルダを選択しました: {path}")
-        else:
-            # キャンセルされた場合もフォーカスを戻す
-            self.focus_force()
+            self.update_log(f"フォルダ選択: {path}")
 
     def update_log(self, message):
-        """ログにメッセージを追加"""
-        self.log_textbox.insert("end", f"[{time.strftime('%H:%M:%S')}] {message}\n")
-        self.log_textbox.see("end")
+        self.log_text.insert("end", f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {message}\n")
+        self.log_text.see("end")
 
-    def show_error(self, message):
-        """日本語のエラーポップアップを表示"""
-        messagebox.showerror("エラー", message)
-
-    def start_analysis(self, mode):
-        """解析開始（マルチスレッドで実行してGUIをフリーズさせない）"""
+    def start_analysis_thread(self):
         if not self.target_path:
-            self.show_error("解析対象の画像フォルダが選択されていません。")
+            messagebox.showwarning("警告", "フォルダを選択してください。")
             return
+        threading.Thread(target=self.run_analysis, daemon=True).start()
 
-        self.update_log(f"モード【{mode}】で解析を開始します...")
-
-        # 解析処理を別スレッドで実行
-        thread = threading.Thread(target=self.run_analysis_process, args=(mode,), daemon=True)
-        thread.start()
-
-    def run_analysis_process(self, mode):
-        """実際の解析ロジックを実行し、CSVを出力します"""
+    def run_analysis(self):
+        """解析本体。透過光と蛍光のペアリングを行い、CSVに集計結果を出力する。"""
         try:
-            self.status_label.configure(text="解析中...")
+            bf_suffix = self.config_data.get("bf_suffix")
+            fl_suffix = self.config_data.get("fl_suffix")
 
-            # 1. 画像ファイルのリストを取得
-            extensions = (".png", ".jpg", ".jpeg", ".tif", ".tiff")
-            image_files = [f for f in os.listdir(self.target_path) if f.lower().endswith(extensions)]
-            if not image_files:
-                self.show_error("選択されたフォルダに画像ファイルが見つかりません。")
+            files = [f for f in os.listdir(self.target_path) if
+                     f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.tiff'))]
+            bf_files = [f for f in files if bf_suffix in f]
+
+            if not bf_files:
+                self.update_log(f"エラー: 接尾辞 '{bf_suffix}' が付いた画像が見つかりません。")
                 return
 
-            all_results = []
-            total = len(image_files)
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_dir = os.path.join(self.target_path, f"result_{timestamp}")
+            os.makedirs(output_dir, exist_ok=True)
 
-            for i, filename in enumerate(image_files):
-                self.update_log(f"解析中 ({i+1}/{total}): {filename}")
+            summary_data = []
+            total = len(bf_files)
 
-                # 画像の読み込み
-                img_path = os.path.join(self.target_path, filename)
-                img = cv2.imread(img_path)
+            for i, bf_filename in enumerate(bf_files):
+                p_base = i / total
+                p_step = 1.0 / total
 
-                if img is None:
-                    self.update_log(f"失敗: {filename} を読み込めませんでした。")
-                    continue
+                # 自動ペアリング
+                fl_filename = bf_filename.replace(bf_suffix, fl_suffix)
+                self.update_log(f"解析中 ({i + 1}/{total}): {bf_filename}")
 
-                # analyzer.py の実行 (透過光とナイルレッドが同じ画像、または同じフォルダにある前提)
-                # 本来はモードに合わせてペアを探すロジックが必要ですが、ここでは単一画像でテスト
-                # 注意: self.analyzer が事前に定義されている必要があります
-                if self.analyzer is not None:
-                    df = self.analyzer.run_analysis(img, img, diameter=self.config_data.get("cell_diameter"))
-                else:
-                    # analyzerが未設定の場合のダミー処理（デバッグ用）
-                    time.sleep(0.1)
-                    df = pd.DataFrame()
+                img_bf = cv2.imread(os.path.join(self.target_path, bf_filename), cv2.IMREAD_UNCHANGED)
+                img_fl = None
+                fl_path = os.path.join(self.target_path, fl_filename)
+                if os.path.exists(fl_path):
+                    img_fl = cv2.imread(fl_path, cv2.IMREAD_UNCHANGED)
 
-                if not df.empty:
-                    df['filename'] = filename
-                    all_results.append(df)
+                def cb(ratio):
+                    self.progressbar.set(p_base + (p_step * ratio))
 
-                # 進捗更新
-                self.progressbar.set((i + 1) / total)
+                # 解析実行
+                stats, vis = self.analyzer.analyze(
+                    img_bf, img_fl,
+                    run_cell=self.run_cell_var.get(),
+                    run_lipid=self.run_lipid_var.get() and img_fl is not None,
+                    progress_callback=cb
+                )
 
-            # 2. 結果をまとめてCSV出力
-            if all_results:
-                final_df = pd.concat(all_results, ignore_index=True)
+                # 可視化画像の書き出し
+                for key, img_out in vis.items():
+                    cv2.imwrite(os.path.join(output_dir, f"{key}_{bf_filename}"), img_out)
 
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                output_path = f"data/output/analysis_result_{timestamp}.csv"
+                # CSV行データの作成（比率項目を追加）
+                row = {
+                    "ファイル名": bf_filename,
+                    "細胞数": stats.get("cell_count", 0),
+                    "細胞面積(px)": stats.get("total_cell_px", 0),
+                    "油脂数": stats.get("lipid_count", 0),
+                    "総油脂面積(px)": stats.get("total_lipid_px", 0),
+                    "細胞内油脂面積(px)": stats.get("integrated_lipid_px", 0),
+                    "油脂面積/細胞面積": stats.get("lipid_cell_ratio", 0)
+                }
+                summary_data.append(row)
 
-                # data/output フォルダがなければ作成
-                os.makedirs("data/output", exist_ok=True)
+            # CSV保存
+            if summary_data:
+                csv_path = os.path.join(output_dir, "analysis_summary.csv")
+                pd.DataFrame(summary_data).to_csv(csv_path, index=False, encoding='utf-8-sig')
 
-                final_df.to_csv(output_path, index=False, encoding='utf-8-sig')
-                self.update_log(f"--- 解析完了 ---")
-                self.update_log(f"保存先: {output_path}")
-                self.status_label.configure(text="完了")
-                messagebox.showinfo("成功", f"解析が完了しました。\n{len(image_files)}枚の画像を処理し、CSVを保存しました。")
-            else:
-                self.update_log("解析結果が空でした。細胞が検出できなかった可能性があります。")
-                self.status_label.configure(text="終了（データなし）")
+            self.update_log(f"全工程完了。保存先:\n{output_dir}")
 
         except Exception as e:
-            self.show_error(f"解析中にエラーが発生しました:\n{str(e)}")
-            self.status_label.configure(text="エラー")
-
-if __name__ == "__main__":
-    app = App()
-    app.mainloop()
+            self.update_log(f"エラー発生: {e}")
+            messagebox.showerror("エラー", str(e))
