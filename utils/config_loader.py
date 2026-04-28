@@ -6,7 +6,7 @@ from pathlib import Path
 
 class ConfigLoader:
     """
-    解析設定をCSVからロードし、プログラム内で利用可能な形式に変換・保持するクラス。
+    解析設定をCSVからロードし、管理するクラス。
     """
     CONFIG_SCHEMA = {
         "細胞モデルパス": {"default": "", "desc": "細胞認識用モデル"},
@@ -23,11 +23,11 @@ class ConfigLoader:
         "油脂最小サイズ": {"default": 20.0, "desc": "最小油脂ピクセル数"},
         "油脂マスク色": {"default": "", "desc": "油脂の描画色"},
 
-        "統合画像：細胞境界色": {"default": "255,255,255", "desc": "統合画像での細胞枠の色"},
-        "統合画像：油脂色": {"default": "", "desc": "統合画像での油脂の色"},
+        "統合画像：細胞境界色": {"default": "255,255,255", "desc": "細胞枠の色"},
+        "統合画像：油脂色": {"default": "", "desc": "油脂の色"},
 
-        "透過光画像識別子": {"default": "_BF", "desc": "透過光画像の識別子"},
-        "蛍光画像識別子": {"default": "_FL", "desc": "蛍光画像の識別子"},
+        "透過光画像識別子": {"default": "_BF", "desc": "透過光画像識別子"},
+        "蛍光画像識別子": {"default": "_FL", "desc": "蛍光画像識別子"},
         "GPU使用": {"default": 1.0, "desc": "GPU利用"}
     }
 
@@ -58,7 +58,7 @@ class ConfigLoader:
         self.load_config()
 
     def load_config(self):
-        """CSV設定ファイルを読み込む"""
+        """CSVファイルを読み込み、最新の設定値をメモリにロードする"""
         if not os.path.exists(self.config_path):
             self._create_default_csv()
 
@@ -79,10 +79,10 @@ class ConfigLoader:
             self.settings = new_settings
         except Exception as e:
             self.logger.error(f"Config load error: {e}")
-            self._apply_all_defaults()
+            if not self.settings:
+                self._apply_all_defaults()
 
     def _validate_value(self, key, value, default):
-        """値が空欄ならデフォルト、数値ならfloatへ変換"""
         if pd.isna(value) or str(value).strip() == "":
             return default
         if isinstance(default, str):
