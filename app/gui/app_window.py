@@ -5,8 +5,10 @@ import threading
 import datetime
 import cv2
 import pandas as pd
+import numpy as np
 import shutil
 from core.analyzer import YeastAnalyzer
+import unicodedata
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -40,31 +42,35 @@ class App(ctk.CTk):
 
         # チェックボックス連動ロジック
         self.run_cell_var = ctk.BooleanVar(value=True)
-        self.cell_check = ctk.CTkCheckBox(self.sidebar_frame, text="細胞解析 (BF)", variable=self.run_cell_var,
-                                          command=self.on_cell_check_changed)
+        self.cell_check = ctk.CTkCheckBox(self.sidebar_frame, text="細胞解析 (BF)",
+                                          variable=self.run_cell_var, command=self.on_cell_check_changed)
         self.cell_check.grid(row=2, column=0, padx=20, pady=10, sticky="w")
 
         self.run_lipid_var = ctk.BooleanVar(value=True)
-        self.lipid_check = ctk.CTkCheckBox(self.sidebar_frame, text="油脂解析 (FL)", variable=self.run_lipid_var,
-                                           command=self.on_lipid_check_changed)
+        self.lipid_check = ctk.CTkCheckBox(self.sidebar_frame, text="油脂解析 (FL)",
+                                           variable=self.run_lipid_var, command=self.on_lipid_check_changed)
         self.lipid_check.grid(row=3, column=0, padx=20, pady=10, sticky="w")
 
         self.start_button = ctk.CTkButton(self.sidebar_frame, text="解析開始", command=self.start_analysis_thread,
                                           fg_color="green", hover_color="darkgreen")
         self.start_button.grid(row=4, column=0, padx=20, pady=20)
 
-        self.log_text = ctk.CTkTextbox(self, width=600, font=ctk.CTkFont(family="Consolas", size=12))
+        # ログエリア
+        self.log_text = ctk.CTkTextbox(self, width=600, font=ctk.CTkFont(family="MS Gothic", size=12))
         self.log_text.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
 
+        # 進捗バー
         self.progressbar = ctk.CTkProgressBar(self)
         self.progressbar.grid(row=2, column=1, padx=20, pady=(0, 20), sticky="ew")
         self.progressbar.set(0)
 
     def on_cell_check_changed(self):
-        if not self.run_cell_var.get(): self.run_lipid_var.set(False)
+        if not self.run_cell_var.get():
+            self.run_lipid_var.set(False)
 
     def on_lipid_check_changed(self):
-        if self.run_lipid_var.get(): self.run_cell_var.set(True)
+        if self.run_lipid_var.get():
+            self.run_cell_var.set(True)
 
     def select_folder(self):
         path = filedialog.askdirectory()
@@ -84,6 +90,7 @@ class App(ctk.CTk):
         threading.Thread(target=self.run_analysis, daemon=True).start()
 
     def run_analysis(self):
+        """解析ループ：各画像の比率算出と、統計情報の出力を行う"""
         try:
             self.start_button.configure(state="disabled", fg_color="gray")
             self.update_log(f"設定ファイルを読み込み中: {self.config_data.config_path}")
@@ -98,7 +105,7 @@ class App(ctk.CTk):
 
             files = [f for f in os.listdir(self.target_path) if
                      f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.tiff'))]
-            bf_files = [f for f in files if bf_sfx in f]
+            bf_files = sorted([f for f in files if bf_sfx in f])
 
             if not bf_files:
                 self.update_log(f"エラー: 画像が見つかりません。")
@@ -110,6 +117,9 @@ class App(ctk.CTk):
             shutil.copy(self.config_data.config_path, os.path.join(output_dir, "used_settings.csv"))
 
             summary_rows = []
+            cell_counts = []  # 細胞数標準偏差算出用
+            lipid_occupancies = []  # 油脂占有率標準偏差算出用
+
             sum_occ, sum_prod, sum_cells, sum_in_pct = 0.0, 0.0, 0, 0.0
             processed_count = 0
             total_files = len(bf_files)
@@ -119,9 +129,9 @@ class App(ctk.CTk):
             self.update_log(f"解析開始: {total_files} セット")
             if run_lipid:
                 self.update_log("定義確認:")
-                self.update_log(" 1. 占有率 (蓄積度) = 細胞内の油脂面積 / 細胞の総面積")
-                self.update_log(" 2. 総生産率 (効率) = 全油脂面積 / 細胞の総面積")
-                self.update_log(" 3. 油脂分布 (分布) = (細胞内の油脂面積 / 全油脂面積) × 100")
+                self.update_log(" 1. 油脂占有率 (蓄積度) = 細胞内の油脂面積 / 細胞の総面積")
+                self.update_log(" 2. 油脂生産率 (効率) = 全油脂面積 / 細胞の総面積")
+                self.update_log(" 3. 細胞内油脂割合 (分布) = (細胞内の油脂面積 / 全油脂面積) × 100")
             self.update_log("=" * 55)
 
             for i, bf_name in enumerate(bf_files):
@@ -138,51 +148,84 @@ class App(ctk.CTk):
                 def cb(ratio):
                     self.progressbar.set(p_base + (p_step * ratio))
 
-                stats, vis = self.analyzer.analyze(img_bf, img_fl, run_cell=run_cell, run_lipid=run_lipid,
-                                                   progress_callback=cb)
+                stats, visuals = self.analyzer.analyze(img_bf, img_fl, run_cell=run_cell, run_lipid=run_lipid,
+                                                       progress_callback=cb)
 
-                for key, img_o in vis.items():
+                for key, img_o in visuals.items():
                     cv2.imwrite(os.path.join(output_dir, f"{PREFIX_MAP.get(key, '')}{key}_{bf_name}"), img_o)
 
-                # 個別ログ出力とCSV行作成の分岐
+                # 個別ログ出力とCSV行作成
                 row = {"ファイル名": bf_name}
                 self.update_log(f"[{i + 1}/{total_files}] {bf_name}")
 
                 if run_cell:
                     cells = stats.get("cell_count", 0)
                     area = stats.get("total_cell_px", 0)
-                    self.update_log(f"   >>> 細胞数: {cells} 個 / 細胞面積: {area} px")
+                    self.update_log(f"   >>> 細胞数   : {cells} 個")
+                    self.update_log(f"   >>> 細胞面積 : {area} px")
                     row.update({"細胞数": cells, "細胞面積(px)": area})
                     sum_cells += cells
+                    cell_counts.append(cells)
 
                 if run_lipid:
                     occ = stats.get("lipid_cell_ratio", 0.0)
                     prod = stats.get("total_production_ratio", 0.0)
                     in_pct = stats.get("intracellular_lipid_percent", 0.0)
-                    self.update_log(f"   >>> 占有率: {occ:.4f} / 生産率: {prod:.4f}")
-                    self.update_log(f"   >>> 分布比: 細胞内 {in_pct * 100:.1f}%")
+                    self.update_log(f"   >>> 油脂占有率     : {occ:.4f}")
+                    self.update_log(f"   >>> 総生産率       : {prod:.4f}")
+                    self.update_log(f"   >>> 細胞内油脂割合 : {in_pct * 100:.1f}%")
                     row.update({"油脂占有率": occ, "総生産率": prod, "細胞内油脂割合(%)": in_pct * 100})
                     sum_occ += occ
                     sum_prod += prod
                     sum_in_pct += in_pct
+                    lipid_occupancies.append(occ)
 
                 summary_rows.append(row)
                 processed_count += 1
 
-            # 全体統計の分岐出力
+            # 全体統計の出力
             if processed_count > 0:
                 self.update_log("-" * 40)
                 self.update_log("【 全画像 統計サマリー 】")
-                if run_cell:
-                    self.update_log(f"   平均 細胞数    : {sum_cells / processed_count:.1f} 個")
-                if run_lipid:
-                    self.update_log(f"   平均 油脂占有率 : {sum_occ / processed_count:.4f}")
-                    self.update_log(f"   平均 総生産率  : {sum_prod / processed_count:.4f}")
-                    self.update_log(f"   平均 油脂分布  : 細胞内 {(sum_in_pct / processed_count) * 100:.1f}%")
-                self.update_log("-" * 40)
 
-                pd.DataFrame(summary_rows).to_csv(os.path.join(output_dir, "analysis_summary.csv"), index=False,
-                                                  encoding='utf-8-sig')
+                summary_stat_row = {"ファイル名": "--- 全体統計平均 ---"}
+
+                if run_cell:
+                    avg_cells = sum_cells / processed_count
+                    sd_cells = np.std(cell_counts, ddof=1) if len(cell_counts) > 1 else 0.0
+                    self.update_log(f"   [平均]     細胞数 : {avg_cells:.1f} 個")
+                    self.update_log(f"   [標準偏差] 細胞数 : {sd_cells:.2f}")
+                    summary_stat_row.update({
+                        "細胞数": avg_cells,
+                        "細胞数標準偏差": sd_cells
+                    })
+
+                if run_lipid:
+                    avg_occ = sum_occ / processed_count
+                    avg_prod = sum_prod / processed_count
+                    avg_dist = (sum_in_pct / processed_count) * 100
+                    sd_occ = np.std(lipid_occupancies, ddof=1) if len(lipid_occupancies) > 1 else 0.0
+
+                    self.update_log(f"   [平均]     油脂占有率 : {avg_occ:.4f}")
+                    self.update_log(f"   [標準偏差] 油脂占有率 : {sd_occ:.4f}")
+                    self.update_log(f"   [平均] 総生産率       : {avg_prod:.4f}")
+                    self.update_log(f"   [平均] 細胞内油脂割合 : {avg_dist:.1f}%")
+
+                    summary_stat_row.update({
+                        "油脂占有率": avg_occ,
+                        "油脂占有率標準偏差": sd_occ,
+                        "総生産率": avg_prod,
+                        "細胞内油脂割合(%)": avg_dist
+                    })
+
+                self.update_log("-" * 40)
+                summary_rows.append(summary_stat_row)
+
+                pd.DataFrame(summary_rows).to_csv(
+                    os.path.join(output_dir, "analysis_summary.csv"),
+                    index=False,
+                    encoding='utf-8-sig'
+                )
 
             self.progressbar.set(1.0)
             self.update_log(f"全解析完了。結果保存先: {output_dir}")
@@ -192,3 +235,9 @@ class App(ctk.CTk):
             messagebox.showerror("エラー", str(e))
         finally:
             self.start_button.configure(state="normal", fg_color="green")
+def pad_text(self, text, width):
+    """全角を2文字、半角を1文字としてカウントして指定幅までスペースで埋める"""
+    # 現在の視覚幅を計算
+    current_width = sum(2 if unicodedata.east_asian_width(c) in "FWA" else 1 for c in text)
+    padding = max(0, width - current_width)
+    return text + " " * padding

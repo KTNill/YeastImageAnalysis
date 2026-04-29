@@ -3,6 +3,8 @@ import os
 import logging
 from pathlib import Path
 
+# プロジェクトのルートディレクトリを取得 (appフォルダの1つ上)
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 
 class ConfigLoader:
     """
@@ -72,7 +74,7 @@ class ConfigLoader:
                 validated_val = self._validate_value(jp_key, val, self.CONFIG_SCHEMA[jp_key]["default"])
 
                 if internal_key.endswith("_path") and validated_val:
-                    new_settings[internal_key] = str(Path(validated_val).absolute())
+                    new_settings[internal_key] = os.path.join(BASE_DIR, validated_val)
                 else:
                     new_settings[internal_key] = validated_val
 
