@@ -17,6 +17,23 @@ class YeastAnalyzer:
         self.logger = logging.getLogger(__name__)
         self.cfg = config
         self.device_available = torch.cuda.is_available() and bool(config.get("use_gpu"))
+        # デバイスの優先順位: CUDA (Win/Linux) > MPS (Mac) > CPU
+        if torch.cuda.is_available():
+            self.device = "cuda"
+            # 最新の計算最適化をすべて「物理的に」オフにする
+            torch.backends.cuda.matmul.allow_tf32 = False
+            torch.backends.cudnn.allow_tf32 = False
+            torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
+            # 演算を最も原始的で確実な FP32 (Single Precision) に固定
+            torch.set_float32_matmul_precision('highest')
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            self.device = "mps"
+        else:
+            self.device = "cpu"
+
+        self.logger.info(f"解析デバイス: {self.device}")
+
+        # CellposeModelの初期化 (gpu=Trueにすると、torchが対応していれば自動でMPSが使われます)
         self.cell_model = self._load_model(config.get("cell_model_path"), 'cyto2', "細胞用")
         self.lipid_model = self._load_model(config.get("lipid_model_path"), 'cyto2', "油脂用")
 

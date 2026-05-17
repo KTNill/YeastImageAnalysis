@@ -7,7 +7,7 @@ import cv2
 import pandas as pd
 import numpy as np
 import shutil
-from core.analyzer import YeastAnalyzer
+from app.core.analyzer import YeastAnalyzer
 import unicodedata
 
 ctk.set_appearance_mode("dark")
@@ -56,7 +56,12 @@ class App(ctk.CTk):
         self.start_button.grid(row=4, column=0, padx=20, pady=20)
 
         # ログエリア
-        self.log_text = ctk.CTkTextbox(self, width=600, font=ctk.CTkFont(family="MS Gothic", size=12))
+        self.log_text = ctk.CTkTextbox(
+            self,
+            width=600,
+            # Mac, Windows 両方の等幅フォントを網羅
+            font=ctk.CTkFont(family=("Menlo", "Osaka-Mono", "MS Gothic", "Consolas"), size=12)
+        )
         self.log_text.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
 
         # 進捗バー
@@ -84,7 +89,6 @@ class App(ctk.CTk):
 
     def start_analysis_thread(self):
         if not self.target_path or not os.path.exists(self.target_path):
-            messagebox.showinfo("お知らせ", "画像フォルダが選択されていません。\nフォルダ選択ダイアログを表示します。")
             self.select_folder()
             if not self.target_path: return
         threading.Thread(target=self.run_analysis, daemon=True).start()
@@ -138,12 +142,12 @@ class App(ctk.CTk):
                 p_base, p_step = i / total_files, 1.0 / total_files
                 fl_name = bf_name.replace(bf_sfx, fl_sfx)
 
-                img_bf = cv2.imread(os.path.join(self.target_path, bf_name), cv2.IMREAD_UNCHANGED)
+                img_bf = cv2.imdecode(np.fromfile(os.path.join(self.target_path, bf_name), dtype=np.uint8), cv2.IMREAD_UNCHANGED)
                 img_fl = None
                 if run_lipid:
                     fl_p = os.path.join(self.target_path, fl_name)
                     if os.path.exists(fl_p):
-                        img_fl = cv2.imread(fl_p, cv2.IMREAD_UNCHANGED)
+                        img_fl = cv2.imdecode(np.fromfile(fl_p, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
 
                 def cb(ratio):
                     self.progressbar.set(p_base + (p_step * ratio))
@@ -235,9 +239,3 @@ class App(ctk.CTk):
             messagebox.showerror("エラー", str(e))
         finally:
             self.start_button.configure(state="normal", fg_color="green")
-def pad_text(self, text, width):
-    """全角を2文字、半角を1文字としてカウントして指定幅までスペースで埋める"""
-    # 現在の視覚幅を計算
-    current_width = sum(2 if unicodedata.east_asian_width(c) in "FWA" else 1 for c in text)
-    padding = max(0, width - current_width)
-    return text + " " * padding

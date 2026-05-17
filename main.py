@@ -2,17 +2,14 @@ import logging
 import os
 import sys
 import datetime
-from utils.config_loader import ConfigLoader
-from core.analyzer import YeastAnalyzer
-from gui.app_window import App
-
-# プロジェクトのルートディレクトリを取得 (appフォルダの1つ上)
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+from app.utils.config_loader import ConfigLoader
+from app.core.analyzer import YeastAnalyzer
+from app.gui.app_window import App
 
 
 def setup_logging():
     """ログ設定：コンソールとlogsフォルダ内のファイルの両方に出力する"""
-    log_dir = os.path.join(BASE_DIR, "logs")
+    log_dir = "logs"
 
     # 1. logsフォルダがなければ作成する
     if not os.path.exists(log_dir):
@@ -40,7 +37,7 @@ def main():
     logger.info("アプリケーションを起動しました。")
 
     # 設定ファイルの読み込み (絶対パスで解決)
-    config_path = os.path.join(BASE_DIR, "config", "settings.csv")
+    config_path = os.path.join("config", "settings.csv")
     config = ConfigLoader(config_path)
 
     # GUIのインスタンスを作成
