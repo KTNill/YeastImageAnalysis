@@ -8,7 +8,6 @@ import pandas as pd
 import numpy as np
 import shutil
 from app.core.analyzer import YeastAnalyzer
-import unicodedata
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -24,13 +23,16 @@ class App(ctk.CTk):
         self.analyzer = None
         self.config_data = None
         self.target_path = ""
+        self.is_running = False
 
         self.title("酵母・油脂 画像解析システム")
         self.geometry("900x700")
 
+        # Configure grid layout
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
+        # Sidebar frame
         self.sidebar_frame = ctk.CTkFrame(self, width=200, corner_radius=0)
         self.sidebar_frame.grid(row=0, column=0, rowspan=3, sticky="nsew")
 
@@ -60,9 +62,10 @@ class App(ctk.CTk):
             self,
             width=600,
             # Mac, Windows 両方の等幅フォントを網羅
-            font=ctk.CTkFont(family=("Menlo", "Osaka-Mono", "MS Gothic", "Consolas"), size=12)
+            font=ctk.CTkFont(family="MS Gothic", size=12)
         )
         self.log_text.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
+        self.log_text.tag_config("filename", foreground="#4DA3FF")
 
         # 進捗バー
         self.progressbar = ctk.CTkProgressBar(self)
@@ -83,20 +86,80 @@ class App(ctk.CTk):
             self.target_path = path
             self.update_log(f"解析フォルダ設定完了: {path}")
 
-    def update_log(self, message):
-        self.log_text.insert("end", f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {message}\n")
+    def update_log(self, message, highlight_text=None):
+        self.after(0, self._append_log, message, highlight_text)
+
+    def _append_log(self, message, highlight_text=None):
+        timestamp = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] "
+        start_index = self.log_text.index("end-1c")
+
+        self.log_text.insert("end", f"{timestamp}{message}\n")
+
+        if highlight_text:
+            highlight_texts = highlight_text if isinstance(highlight_text, list) else [highlight_text]
+
+            for text in highlight_texts:
+                search_start = start_index
+                while True:
+                    found_index = self.log_text.search(text, search_start, stopindex="end")
+                    if not found_index:
+                        break
+
+                    found_end = f"{found_index}+{len(text)}c"
+                    self.log_text.tag_add("filename", found_index, found_end)
+                    search_start = found_end
+
         self.log_text.see("end")
 
+    def set_progress(self, value):
+        self.after(0, self.progressbar.set, value)
+
+    def update_status(self, message=None, progress=None, highlight_text=None, enable_start_button=None):
+        self.after(0, self._update_status, message, progress, highlight_text, enable_start_button)
+
+    def _update_status(self, message=None, progress=None, highlight_text=None, enable_start_button=None):
+        if message is not None:
+            self._append_log(message, highlight_text)
+
+        if progress is not None:
+            self.progressbar.set(progress)
+
+        if enable_start_button is not None:
+            self.is_running = not enable_start_button
+            state = "normal" if enable_start_button else "disabled"
+            color = "green" if enable_start_button else "gray"
+            self.start_button.configure(state=state, fg_color=color)
+
+    def set_start_button_enabled_now(self, enabled):
+        state = "normal" if enabled else "disabled"
+        color = "green" if enabled else "gray"
+        self.start_button.configure(state=state, fg_color=color)
+
+    def set_start_button_enabled(self, enabled):
+        state = "normal" if enabled else "disabled"
+        color = "green" if enabled else "gray"
+        self.after(0, self.start_button.configure, {"state": state, "fg_color": color})
+
+    def show_error(self, title, message):
+        self.after(0, messagebox.showerror, title, message)
+
     def start_analysis_thread(self):
+        if self.is_running:
+            return
+
         if not self.target_path or not os.path.exists(self.target_path):
             self.select_folder()
-            if not self.target_path: return
+            if not self.target_path:
+                return
+
+        self.is_running = True
+        self.set_start_button_enabled_now(False)
+
         threading.Thread(target=self.run_analysis, daemon=True).start()
 
     def run_analysis(self):
         """解析ループ：各画像の比率算出と、統計情報の出力を行う"""
         try:
-            self.start_button.configure(state="disabled", fg_color="gray")
             self.update_log(f"設定ファイルを読み込み中: {self.config_data.config_path}")
             self.config_data.load_config()
             self.analyzer = YeastAnalyzer(self.config_data)
@@ -104,15 +167,36 @@ class App(ctk.CTk):
             run_cell = self.run_cell_var.get()
             run_lipid = self.run_lipid_var.get()
 
-            bf_sfx = self.config_data.get("bf_suffix")
-            fl_sfx = self.config_data.get("fl_suffix")
+            bf_sfx = str(self.config_data.get("bf_suffix", "")).strip()
+            fl_sfx = str(self.config_data.get("fl_suffix", "")).strip()
 
-            files = [f for f in os.listdir(self.target_path) if
-                     f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.tiff'))]
-            bf_files = sorted([f for f in files if bf_sfx in f])
+            files = [
+                f for f in os.listdir(self.target_path)
+                if f.lower().endswith((".png", ".jpg", ".jpeg", ".tif", ".tiff"))
+            ]
+
+            bf_sfx_lower = bf_sfx.lower()
+            bf_files = sorted([f for f in files if bf_sfx_lower in f.lower()])
 
             if not bf_files:
-                self.update_log(f"エラー: 画像が見つかりません。")
+                sample_file_names = files[:10]
+                if sample_file_names:
+                    sample_files = "\n".join(f"      - {file_name}" for file_name in sample_file_names)
+                    highlight_files = sample_file_names
+                else:
+                    sample_files = "      画像ファイル自体が見つかりません。"
+                    highlight_files = None
+
+                self.update_status(
+                    "エラー: 画像が見つかりません。\n"
+                    f"   対象フォルダ: {self.target_path}\n"
+                    f"   BF識別子: {bf_sfx}\n"
+                    f"   検出した画像数: {len(files)}\n"
+                    f"   画像ファイル例:\n{sample_files}",
+                    1.0,
+                    highlight_text=highlight_files,
+                    enable_start_button=True
+                )
                 return
 
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -127,46 +211,85 @@ class App(ctk.CTk):
             sum_occ, sum_prod, sum_cells, sum_in_pct = 0.0, 0.0, 0, 0.0
             processed_count = 0
             total_files = len(bf_files)
-            PREFIX_MAP = {"cell": "01_", "lipid": "02_", "combined": "03_"}
+            prefix_map = {"cell": "01_", "lipid": "02_", "combined": "03_"}
 
-            self.update_log("=" * 55)
-            self.update_log(f"解析開始: {total_files} セット")
+            start_log_lines = [
+                "=" * 55,
+                f"解析開始: {total_files} セット"
+            ]
             if run_lipid:
-                self.update_log("定義確認:")
-                self.update_log(" 1. 油脂占有率 (蓄積度) = 細胞内の油脂面積 / 細胞の総面積")
-                self.update_log(" 2. 油脂生産率 (効率) = 全油脂面積 / 細胞の総面積")
-                self.update_log(" 3. 細胞内油脂割合 (分布) = (細胞内の油脂面積 / 全油脂面積) × 100")
-            self.update_log("=" * 55)
+                start_log_lines.extend([
+                    "定義確認:",
+                    " 1. 油脂占有率 (蓄積度) = 細胞内の油脂面積 / 細胞の総面積",
+                    " 2. 油脂生産率 (効率) = 全油脂面積 / 細胞の総面積",
+                    " 3. 細胞内油脂割合 (分布) = (細胞内の油脂面積 / 全油脂面積) × 100",
+                ])
+            start_log_lines.append("=" * 55)
+            self.update_log("\n".join(start_log_lines))
 
             for i, bf_name in enumerate(bf_files):
-                p_base, p_step = i / total_files, 1.0 / total_files
-                fl_name = bf_name.replace(bf_sfx, fl_sfx)
+                progress_value = (i + 1) / total_files
 
-                img_bf = cv2.imdecode(np.fromfile(os.path.join(self.target_path, bf_name), dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+                stem, ext = os.path.splitext(bf_name)
+                if stem.endswith(bf_sfx):
+                    fl_name = f"{stem[:-len(bf_sfx)]}{fl_sfx}{ext}"
+                else:
+                    self.update_status(
+                        f"スキップ: BF識別子が末尾にありません: {bf_name}",
+                        progress_value,
+                        highlight_text=bf_name
+                    )
+                    continue
+
+                img_bf = cv2.imdecode(np.fromfile(os.path.join(self.target_path, bf_name), dtype=np.uint8),
+                                      cv2.IMREAD_UNCHANGED)
                 img_fl = None
                 if run_lipid:
                     fl_p = os.path.join(self.target_path, fl_name)
                     if os.path.exists(fl_p):
                         img_fl = cv2.imdecode(np.fromfile(fl_p, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
 
-                def cb(ratio):
-                    self.progressbar.set(p_base + (p_step * ratio))
+                if img_bf is None:
+                    self.update_status(
+                        f"警告: BF画像の読み込みに失敗しました。スキップします: {bf_name}",
+                        progress_value,
+                        highlight_text=bf_name
+                    )
+                    continue
 
-                stats, visuals = self.analyzer.analyze(img_bf, img_fl, run_cell=run_cell, run_lipid=run_lipid,
-                                                       progress_callback=cb)
+                if run_lipid and img_fl is None:
+                    self.update_status(
+                        f"警告: 対応する蛍光画像が見つかりません。スキップします: {fl_name}",
+                        progress_value,
+                        highlight_text=fl_name
+                    )
+                    continue
 
-                for key, img_o in visuals.items():
-                    cv2.imwrite(os.path.join(output_dir, f"{PREFIX_MAP.get(key, '')}{key}_{bf_name}"), img_o)
+                try:
+                    stats, visuals = self.analyzer.analyze(
+                        img_bf,
+                        img_fl,
+                        run_cell=run_cell,
+                        run_lipid=run_lipid,
+                        progress_callback=None
+                    )
+                except Exception as e:
+                    self.update_status(
+                        f"警告: 解析に失敗しました。スキップします: {bf_name}\n   理由: {e}",
+                        progress_value,
+                        highlight_text=bf_name
+                    )
+                    continue
 
-                # 個別ログ出力とCSV行作成
+                    # 個別ログ出力とCSV行作成
                 row = {"ファイル名": bf_name}
-                self.update_log(f"[{i + 1}/{total_files}] {bf_name}")
+                log_lines = [f"[{i + 1}/{total_files}] {bf_name}"]
 
                 if run_cell:
                     cells = stats.get("cell_count", 0)
                     area = stats.get("total_cell_px", 0)
-                    self.update_log(f"   >>> 細胞数   : {cells} 個")
-                    self.update_log(f"   >>> 細胞面積 : {area} px")
+                    log_lines.append(f"   >>> 細胞数   : {cells} 個")
+                    log_lines.append(f"   >>> 細胞面積 : {area} px")
                     row.update({"細胞数": cells, "細胞面積(px)": area})
                     sum_cells += cells
                     cell_counts.append(cells)
@@ -175,30 +298,50 @@ class App(ctk.CTk):
                     occ = stats.get("lipid_cell_ratio", 0.0)
                     prod = stats.get("total_production_ratio", 0.0)
                     in_pct = stats.get("intracellular_lipid_percent", 0.0)
-                    self.update_log(f"   >>> 油脂占有率     : {occ:.4f}")
-                    self.update_log(f"   >>> 総生産率       : {prod:.4f}")
-                    self.update_log(f"   >>> 細胞内油脂割合 : {in_pct * 100:.1f}%")
+                    log_lines.append(f"   >>> 油脂占有率     : {occ:.4f}")
+                    log_lines.append(f"   >>> 総生産率       : {prod:.4f}")
+                    log_lines.append(f"   >>> 細胞内油脂割合 : {in_pct * 100:.1f}%")
                     row.update({"油脂占有率": occ, "総生産率": prod, "細胞内油脂割合(%)": in_pct * 100})
                     sum_occ += occ
                     sum_prod += prod
                     sum_in_pct += in_pct
                     lipid_occupancies.append(occ)
 
+                self.update_status(
+                    "\n".join(log_lines),
+                    progress_value,
+                    highlight_text=bf_name
+                )
+
+                for key, img_o in visuals.items():
+                    output_path = os.path.join(output_dir, f"{prefix_map.get(key, '')}{key}_{bf_name}")
+                    ext = os.path.splitext(output_path)[1]
+                    success, encoded = cv2.imencode(ext, img_o)
+                    if success:
+                        encoded.tofile(output_path)
+                    else:
+                        self.update_log(
+                            f"警告: 結果画像の保存に失敗しました: {output_path}",
+                            highlight_text=bf_name
+                        )
+
                 summary_rows.append(row)
                 processed_count += 1
 
             # 全体統計の出力
             if processed_count > 0:
-                self.update_log("-" * 40)
-                self.update_log("【 全画像 統計サマリー 】")
+                summary_log_lines = [
+                    "-" * 40,
+                    "【 全画像 統計サマリー 】"
+                ]
 
                 summary_stat_row = {"ファイル名": "--- 全体統計平均 ---"}
 
                 if run_cell:
                     avg_cells = sum_cells / processed_count
-                    sd_cells = np.std(cell_counts, ddof=1) if len(cell_counts) > 1 else 0.0
-                    self.update_log(f"   [平均]     細胞数 : {avg_cells:.1f} 個")
-                    self.update_log(f"   [標準偏差] 細胞数 : {sd_cells:.2f}")
+                    sd_cells = float(np.std(cell_counts, ddof=1)) if len(cell_counts) > 1 else 0.0
+                    summary_log_lines.append(f"   [平均]     細胞数 : {avg_cells:.1f} 個")
+                    summary_log_lines.append(f"   [標準偏差] 細胞数 : {sd_cells:.2f}")
                     summary_stat_row.update({
                         "細胞数": avg_cells,
                         "細胞数標準偏差": sd_cells
@@ -208,12 +351,12 @@ class App(ctk.CTk):
                     avg_occ = sum_occ / processed_count
                     avg_prod = sum_prod / processed_count
                     avg_dist = (sum_in_pct / processed_count) * 100
-                    sd_occ = np.std(lipid_occupancies, ddof=1) if len(lipid_occupancies) > 1 else 0.0
+                    sd_occ = float(np.std(lipid_occupancies, ddof=1)) if len(lipid_occupancies) > 1 else 0.0
 
-                    self.update_log(f"   [平均]     油脂占有率 : {avg_occ:.4f}")
-                    self.update_log(f"   [標準偏差] 油脂占有率 : {sd_occ:.4f}")
-                    self.update_log(f"   [平均] 総生産率       : {avg_prod:.4f}")
-                    self.update_log(f"   [平均] 細胞内油脂割合 : {avg_dist:.1f}%")
+                    summary_log_lines.append(f"   [平均]     油脂占有率 : {avg_occ:.4f}")
+                    summary_log_lines.append(f"   [標準偏差] 油脂占有率 : {sd_occ:.4f}")
+                    summary_log_lines.append(f"   [平均] 総生産率       : {avg_prod:.4f}")
+                    summary_log_lines.append(f"   [平均] 細胞内油脂割合 : {avg_dist:.1f}%")
 
                     summary_stat_row.update({
                         "油脂占有率": avg_occ,
@@ -222,7 +365,9 @@ class App(ctk.CTk):
                         "細胞内油脂割合(%)": avg_dist
                     })
 
-                self.update_log("-" * 40)
+                summary_log_lines.append("-" * 40)
+                summary_log_lines.append(f"全解析完了。結果保存先: {output_dir}")
+
                 summary_rows.append(summary_stat_row)
 
                 pd.DataFrame(summary_rows).to_csv(
@@ -231,11 +376,21 @@ class App(ctk.CTk):
                     encoding='utf-8-sig'
                 )
 
-            self.progressbar.set(1.0)
-            self.update_log(f"全解析完了。結果保存先: {output_dir}")
+                self.update_status(
+                    "\n".join(summary_log_lines),
+                    1.0,
+                    enable_start_button=True
+                )
+            else:
+                self.update_status(
+                    "処理対象の画像がありませんでした。",
+                    1.0,
+                    enable_start_button=True
+                )
 
         except Exception as e:
-            self.update_log(f"エラー: {e}")
-            messagebox.showerror("エラー", str(e))
-        finally:
-            self.start_button.configure(state="normal", fg_color="green")
+            self.update_status(
+                f"エラー: {e}",
+                enable_start_button=True
+            )
+            self.show_error("エラー", str(e))

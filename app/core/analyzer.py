@@ -13,29 +13,33 @@ class YeastAnalyzer:
     """
 
     def __init__(self, config):
-        logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
         self.cfg = config
-        self.device_available = torch.cuda.is_available() and bool(config.get("use_gpu"))
+
+        use_gpu = bool(config.get("use_gpu"))
+        self.device_available = False
+
         # デバイスの優先順位: CUDA (Win/Linux) > MPS (Mac) > CPU
-        if torch.cuda.is_available():
+        if use_gpu and torch.cuda.is_available():
             self.device = "cuda"
+            self.device_available = True
             # 最新の計算最適化をすべて「物理的に」オフにする
             torch.backends.cuda.matmul.allow_tf32 = False
             torch.backends.cudnn.allow_tf32 = False
             torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
             # 演算を最も原始的で確実な FP32 (Single Precision) に固定
-            torch.set_float32_matmul_precision('highest')
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            torch.set_float32_matmul_precision("highest")
+        elif use_gpu and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             self.device = "mps"
+            self.device_available = True
         else:
             self.device = "cpu"
 
         self.logger.info(f"解析デバイス: {self.device}")
 
-        # CellposeModelの初期化 (gpu=Trueにすると、torchが対応していれば自動でMPSが使われます)
-        self.cell_model = self._load_model(config.get("cell_model_path"), 'cyto2', "細胞用")
-        self.lipid_model = self._load_model(config.get("lipid_model_path"), 'cyto2', "油脂用")
+        # CellposeModelの初期化
+        self.cell_model = self._load_model(config.get("cell_model_path"), "cyto2", "細胞用")
+        self.lipid_model = self._load_model(config.get("lipid_model_path"), "cyto2", "油脂用")
 
     def _load_model(self, model_path, fallback_model, model_name):
         try:
@@ -84,6 +88,12 @@ class YeastAnalyzer:
 
         # 3. 統合解析（両方のフラグがONの場合のみ実行）
         if run_cell and run_lipid and cell_masks is not None and lipid_masks is not None:
+            if cell_masks.shape != lipid_masks.shape:
+                raise ValueError(
+                    f"細胞マスクと油脂マスクのサイズが一致しません: "
+                    f"cell={cell_masks.shape}, lipid={lipid_masks.shape}"
+                )
+
             integrated_masks = np.where(cell_masks > 0, lipid_masks, 0)
             integrated_px = int(np.sum(integrated_masks > 0))
             extracellular_px = total_lipid_px - integrated_px
@@ -102,15 +112,27 @@ class YeastAnalyzer:
         return results, visuals
 
     def _parse_color(self, color_str):
-        if not color_str: return None
+        if not color_str:
+            return None
+
         try:
             c = str(color_str).strip()
-            if "," in c: return [int(x.strip()) for x in c.split(",")]
+            if "," in c:
+                values = [int(x.strip()) for x in c.split(",")]
+                if len(values) == 3 and all(0 <= value <= 255 for value in values):
+                    return values
+                return None
+
             if c.startswith("#") and len(c) == 7:
                 return [int(c[5:7], 16), int(c[3:5], 16), int(c[1:3], 16)]
-        except:
+        except Exception:
             return None
+
         return None
+
+    def _color_for_id(self, mask_id, salt=0):
+        rng = np.random.default_rng((int(mask_id) * 1009) + salt)
+        return rng.integers(100, 255, size=3).tolist()
 
     def _prepare_canvas(self, img):
         if len(img.shape) == 2:
@@ -128,7 +150,7 @@ class YeastAnalyzer:
         base_color = self._parse_color(color_str)
         if max_id > 0:
             for i in range(1, max_id + 1):
-                color = base_color if base_color is not None else np.random.randint(100, 255, 3).tolist()
+                color = base_color if base_color is not None else self._color_for_id(i)
                 overlay[masks == i] = color
         blended = cv2.addWeighted(overlay, 0.4, canvas, 0.6, 0)
         if highlight_boundaries and max_id > 0:
@@ -145,12 +167,12 @@ class YeastAnalyzer:
                 canvas[bounds] = cell_color
             else:
                 for i in range(1, max_cell_id + 1):
-                    canvas[np.logical_and(bounds, cell_masks == i)] = np.random.randint(100, 255, 3).tolist()
+                    canvas[np.logical_and(bounds, cell_masks == i)] = self._color_for_id(i, salt=10_000)
         overlay = canvas.copy()
         max_lipid_id = int(np.max(lipid_masks))
         lipid_color = self._parse_color(lipid_color_str)
         if max_lipid_id > 0:
             for i in range(1, max_lipid_id + 1):
-                color = lipid_color if lipid_color is not None else np.random.randint(100, 255, 3).tolist()
+                color = lipid_color if lipid_color is not None else self._color_for_id(i, salt=20_000)
                 overlay[lipid_masks == i] = color
         return cv2.addWeighted(overlay, 0.5, canvas, 0.5, 0)

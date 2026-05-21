@@ -2,6 +2,7 @@ import pandas as pd
 import os
 import logging
 
+
 class ConfigLoader:
     """
     解析設定をCSVからロードし、管理するクラス。
@@ -62,6 +63,11 @@ class ConfigLoader:
 
         try:
             df = pd.read_csv(self.config_path, encoding='utf-8-sig')
+            required_columns = {"項目名", "設定値"}
+            missing_columns = required_columns - set(df.columns)
+            if missing_columns:
+                raise ValueError(f"設定CSVに必要な列がありません: {', '.join(missing_columns)}")
+
             new_settings = {}
             for jp_key, internal_key in self.KEY_MAP.items():
                 row = df[df["項目名"] == jp_key]
@@ -93,9 +99,12 @@ class ConfigLoader:
             self.settings[internal_key] = self.CONFIG_SCHEMA[jp_key]["default"]
 
     def _create_default_csv(self):
-        os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
+        config_dir = os.path.dirname(self.config_path)
+        if config_dir:
+            os.makedirs(config_dir, exist_ok=True)
+
         data = [{"項目名": k, "設定値": v["default"], "説明": v["desc"]} for k, v in self.CONFIG_SCHEMA.items()]
         pd.DataFrame(data).to_csv(self.config_path, index=False, encoding='utf-8-sig')
 
-    def get(self, key):
-        return self.settings.get(key)
+    def get(self, key, default=None):
+        return self.settings.get(key, default)

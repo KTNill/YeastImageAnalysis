@@ -154,10 +154,12 @@ activemq-data/
 .idea
 env/
 venv/
+python_env/
 ENV/
 env.bak/
 venv.bak/
 idea/
+logs/
 
 # Spyder project settings
 .spyderproject

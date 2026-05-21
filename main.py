@@ -46,8 +46,6 @@ def main():
 
     # 解析エンジンの初期化
     try:
-        # ここで再度 logging.basicConfig が呼ばれると設定が上書きされる可能性があるため、
-        # analyzer.py 側の logging.basicConfig(level=logging.INFO) は削除することを推奨します。
         analyzer = YeastAnalyzer(config)
         app.analyzer = analyzer
     except Exception as e:
