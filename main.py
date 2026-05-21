@@ -3,7 +3,6 @@ import os
 import sys
 import datetime
 from app.utils.config_loader import ConfigLoader
-from app.core.analyzer import YeastAnalyzer
 from app.gui.app_window import App
 
 
@@ -43,14 +42,7 @@ def main():
     # GUIのインスタンスを作成
     app = App()
     app.config_data = config
-
-    # 解析エンジンの初期化
-    try:
-        analyzer = YeastAnalyzer(config)
-        app.analyzer = analyzer
-    except Exception as e:
-        logger.error(f"解析エンジンの初期化エラー: {e}")
-        app.analyzer = None
+    app.analyzer = None
 
     # メインループの実行
     app.mainloop()

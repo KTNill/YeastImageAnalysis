@@ -3,7 +3,6 @@ import numpy as np
 import os
 import cv2
 import logging
-from cellpose.models import CellposeModel
 from skimage.segmentation import find_boundaries
 
 
@@ -43,12 +42,14 @@ class YeastAnalyzer:
 
     def _load_model(self, model_path, fallback_model, model_name):
         try:
+            from cellpose.models import CellposeModel
+
             if model_path and os.path.exists(model_path):
                 return CellposeModel(gpu=self.device_available, pretrained_model=model_path)
             return CellposeModel(gpu=self.device_available, model_type=fallback_model)
         except Exception as e:
             self.logger.error(f"{model_name}モデルの初期化失敗: {e}")
-            return CellposeModel(gpu=self.device_available, model_type=fallback_model)
+            raise
 
     def analyze(self, bf_image, fl_image, run_cell=True, run_lipid=True, progress_callback=None):
         results = {}

@@ -7,7 +7,6 @@ import cv2
 import pandas as pd
 import numpy as np
 import shutil
-from app.core.analyzer import YeastAnalyzer
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -21,6 +20,7 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.analyzer = None
+        self.analyzer_signature = None
         self.config_data = None
         self.target_path = ""
         self.is_running = False
@@ -66,6 +66,7 @@ class App(ctk.CTk):
         )
         self.log_text.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
         self.log_text.tag_config("filename", foreground="#4DA3FF")
+        self.log_text.tag_config("summary_title", foreground="#FFD166")
 
         # 進捗バー
         self.progressbar = ctk.CTkProgressBar(self)
@@ -89,6 +90,22 @@ class App(ctk.CTk):
     def update_log(self, message, highlight_text=None):
         self.after(0, self._append_log, message, highlight_text)
 
+    def update_log_sync(self, message, highlight_text=None):
+        if threading.current_thread() is threading.main_thread():
+            self._append_log(message, highlight_text)
+            return
+
+        completed = threading.Event()
+
+        def append_and_notify():
+            try:
+                self._append_log(message, highlight_text)
+            finally:
+                completed.set()
+
+        self.after(0, append_and_notify)
+        completed.wait()
+
     def _append_log(self, message, highlight_text=None):
         timestamp = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] "
         start_index = self.log_text.index("end-1c")
@@ -108,6 +125,29 @@ class App(ctk.CTk):
                     found_end = f"{found_index}+{len(text)}c"
                     self.log_text.tag_add("filename", found_index, found_end)
                     search_start = found_end
+
+        highlighted_titles = [
+            "【 全画像 統計サマリー 】",
+            "【解析開始:"
+        ]
+
+        for title in highlighted_titles:
+            search_start = start_index
+            while True:
+                found_index = self.log_text.search(title, search_start, stopindex="end")
+                if not found_index:
+                    break
+
+                if title == "【解析開始:":
+                    line_end = self.log_text.search("】", found_index, stopindex="end")
+                    if not line_end:
+                        break
+                    found_end = f"{line_end}+1c"
+                else:
+                    found_end = f"{found_index}+{len(title)}c"
+
+                self.log_text.tag_add("summary_title", found_index, found_end)
+                search_start = found_end
 
         self.log_text.see("end")
 
@@ -162,7 +202,7 @@ class App(ctk.CTk):
         try:
             self.update_log(f"設定ファイルを読み込み中: {self.config_data.config_path}")
             self.config_data.load_config()
-            self.analyzer = YeastAnalyzer(self.config_data)
+            self.prepare_analyzer()
 
             run_cell = self.run_cell_var.get()
             run_lipid = self.run_lipid_var.get()
@@ -214,24 +254,25 @@ class App(ctk.CTk):
             prefix_map = {"cell": "01_", "lipid": "02_", "combined": "03_"}
 
             start_log_lines = [
-                "=" * 55,
-                f"解析開始: {total_files} セット"
+                f"【解析開始: {total_files} セット】"
             ]
             if run_lipid:
                 start_log_lines.extend([
+                    "=" * 55,
                     "定義確認:",
-                    " 1. 油脂占有率 (蓄積度) = 細胞内の油脂面積 / 細胞の総面積",
-                    " 2. 油脂生産率 (効率) = 全油脂面積 / 細胞の総面積",
+                    " 1. 油脂占有率 (蓄積度)   = 細胞内の油脂面積 / 細胞の総面積",
+                    " 2. 油脂生産率 (効率)     = 全油脂面積 / 細胞の総面積",
                     " 3. 細胞内油脂割合 (分布) = (細胞内の油脂面積 / 全油脂面積) × 100",
+                    "=" * 55
                 ])
-            start_log_lines.append("=" * 55)
+
             self.update_log("\n".join(start_log_lines))
 
             for i, bf_name in enumerate(bf_files):
                 progress_value = (i + 1) / total_files
 
                 stem, ext = os.path.splitext(bf_name)
-                if stem.endswith(bf_sfx):
+                if stem.lower().endswith(bf_sfx_lower):
                     fl_name = f"{stem[:-len(bf_sfx)]}{fl_sfx}{ext}"
                 else:
                     self.update_status(
@@ -331,6 +372,7 @@ class App(ctk.CTk):
             # 全体統計の出力
             if processed_count > 0:
                 summary_log_lines = [
+                    "",
                     "-" * 40,
                     "【 全画像 統計サマリー 】"
                 ]
@@ -366,7 +408,7 @@ class App(ctk.CTk):
                     })
 
                 summary_log_lines.append("-" * 40)
-                summary_log_lines.append(f"全解析完了。結果保存先: {output_dir}")
+                summary_log_lines.append(f"解析結果保存先: {output_dir}")
 
                 summary_rows.append(summary_stat_row)
 
@@ -379,6 +421,7 @@ class App(ctk.CTk):
                 self.update_status(
                     "\n".join(summary_log_lines),
                     1.0,
+                    highlight_text=output_dir,
                     enable_start_button=True
                 )
             else:
@@ -394,3 +437,24 @@ class App(ctk.CTk):
                 enable_start_button=True
             )
             self.show_error("エラー", str(e))
+
+    def get_analyzer_signature(self):
+        return (
+            self.config_data.get("cell_model_path"),
+            self.config_data.get("lipid_model_path"),
+            self.config_data.get("use_gpu"),
+        )
+
+    def prepare_analyzer(self):
+        from app.core.analyzer import YeastAnalyzer
+
+        signature = self.get_analyzer_signature()
+
+        if self.analyzer is None or self.analyzer_signature != signature:
+            self.update_log_sync("解析モデルを初期化しています。")
+            self.analyzer = YeastAnalyzer(self.config_data)
+            self.analyzer_signature = signature
+            self.update_log("解析モデルの初期化が完了しました。")
+        else:
+            self.update_log("既存の解析モデルを再利用します。")
+            self.analyzer.cfg = self.config_data
