@@ -192,240 +192,348 @@ class App(ctk.CTk):
 
         threading.Thread(target=self.run_analysis, daemon=True).start()
 
-    def run_analysis(self):
-        """解析ループ：各画像の比率算出と、統計情報の出力を行う"""
-        try:
-            self.update_log(f"設定ファイルを読み込み中: {self.config_data.config_path}")
-            if not self.config_data.load_config():
-                self.update_log("警告: 設定CSVの読み込みに失敗したため、前回またはデフォルト設定を使用します。")
-            self.prepare_analyzer()
+    def prepare_analysis_context(self):
+        self.update_log(f"設定ファイルを読み込み中: {self.config_data.config_path}")
+        if not self.config_data.load_config():
+            self.update_log("警告: 設定CSVの読み込みに失敗したため、前回またはデフォルト設定を使用します。")
 
-            run_cell = self.run_cell_var.get()
-            run_lipid = self.run_lipid_var.get()
+        self.prepare_analyzer()
 
-            bf_sfx = str(self.config_data.get("bf_suffix", "")).strip()
-            fl_sfx = str(self.config_data.get("fl_suffix", "")).strip()
+        run_cell = self.run_cell_var.get()
+        run_lipid = self.run_lipid_var.get()
+        bf_suffix = str(self.config_data.get("bf_suffix", "")).strip()
+        fl_suffix = str(self.config_data.get("fl_suffix", "")).strip()
 
-            files = [
-                f for f in os.listdir(self.target_path)
-                if f.lower().endswith((".png", ".jpg", ".jpeg", ".tif", ".tiff"))
-            ]
+        return run_cell, run_lipid, bf_suffix, fl_suffix
 
-            bf_sfx_lower = bf_sfx.lower()
-            bf_files = sorted([f for f in files if bf_sfx_lower in f.lower()])
+    def collect_image_files(self, bf_suffix):
+        image_extensions = (".png", ".jpg", ".jpeg", ".tif", ".tiff")
+        files = [
+            file_name for file_name in os.listdir(self.target_path)
+            if file_name.lower().endswith(image_extensions)
+        ]
 
-            if not bf_files:
-                sample_file_names = files[:10]
-                if sample_file_names:
-                    sample_files = "\n".join(f"      - {file_name}" for file_name in sample_file_names)
-                    highlight_files = sample_file_names
-                else:
-                    sample_files = "      画像ファイル自体が見つかりません。"
-                    highlight_files = None
+        bf_suffix_lower = bf_suffix.lower()
+        bf_files = sorted([file_name for file_name in files if bf_suffix_lower in file_name.lower()])
 
-                self.update_status(
-                    "エラー: 画像が見つかりません。\n"
-                    f"   対象フォルダ: {self.target_path}\n"
-                    f"   BF識別子: {bf_sfx}\n"
-                    f"   検出した画像数: {len(files)}\n"
-                    f"   画像ファイル例:\n{sample_files}",
-                    1.0,
-                    highlight_text=highlight_files,
-                    enable_start_button=True
-                )
-                return
+        return files, bf_files, bf_suffix_lower
 
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_dir = os.path.join(self.target_path, f"result_{timestamp}")
-            os.makedirs(output_dir, exist_ok=True)
-            shutil.copy(self.config_data.config_path, os.path.join(output_dir, "used_settings.csv"))
+    def handle_no_bf_images(self, files, bf_suffix):
+        sample_file_names = files[:10]
+        if sample_file_names:
+            sample_files = "\n".join(f"      - {file_name}" for file_name in sample_file_names)
+            highlight_files = sample_file_names
+        else:
+            sample_files = "      画像ファイル自体が見つかりません。"
+            highlight_files = None
 
-            summary_rows = []
-            cell_counts = []  # 細胞数標準偏差算出用
-            lipid_occupancies = []  # 油脂占有率標準偏差算出用
+        self.update_status(
+            "エラー: 画像が見つかりません。\n"
+            f"   対象フォルダ: {self.target_path}\n"
+            f"   BF識別子: {bf_suffix}\n"
+            f"   検出した画像数: {len(files)}\n"
+            f"   画像ファイル例:\n{sample_files}",
+            1.0,
+            highlight_text=highlight_files,
+            enable_start_button=True
+        )
 
-            sum_occ, sum_prod, sum_cells, sum_in_pct = 0.0, 0.0, 0, 0.0
-            processed_count = 0
-            total_files = len(bf_files)
-            prefix_map = {"cell": "01_", "lipid": "02_", "combined": "03_"}
+    def create_output_directory(self):
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = os.path.join(self.target_path, f"result_{timestamp}")
+        os.makedirs(output_dir, exist_ok=True)
+        shutil.copy(self.config_data.config_path, os.path.join(output_dir, "used_settings.csv"))
+        return output_dir
 
-            start_log_lines = [
-                f"【解析開始: {total_files} セット】"
-            ]
-            if run_lipid:
-                start_log_lines.extend([
-                    "=" * 55,
-                    "定義確認:",
-                    " 1. 油脂占有率 (蓄積度)   = 細胞内の油脂面積 / 細胞の総面積",
-                    " 2. 油脂生産率 (効率)     = 全油脂面積 / 細胞の総面積",
-                    " 3. 細胞内油脂割合 (分布) = (細胞内の油脂面積 / 全油脂面積) × 100",
-                    "=" * 55
-                ])
+    def build_start_log(self, total_files, run_lipid):
+        start_log_lines = [
+            f"【解析開始: {total_files} セット】"
+        ]
 
-            self.update_log("\n".join(start_log_lines))
+        if run_lipid:
+            start_log_lines.extend([
+                "=" * 55,
+                "定義確認:",
+                " 1. 油脂占有率 (蓄積度)   = 細胞内の油脂面積 / 細胞の総面積",
+                " 2. 油脂生産率 (効率)     = 全油脂面積 / 細胞の総面積",
+                " 3. 細胞内油脂割合 (分布) = (細胞内の油脂面積 / 全油脂面積) × 100",
+                "=" * 55
+            ])
 
-            for i, bf_name in enumerate(bf_files):
-                progress_value = (i + 1) / total_files
+        return "\n".join(start_log_lines)
 
-                stem, ext = os.path.splitext(bf_name)
-                if stem.lower().endswith(bf_sfx_lower):
-                    fl_name = f"{stem[:-len(bf_sfx)]}{fl_sfx}{ext}"
-                else:
-                    self.update_status(
-                        f"スキップ: BF識別子が末尾にありません: {bf_name}",
-                        progress_value,
-                        highlight_text=bf_name
-                    )
-                    continue
+    def build_fl_name(self, bf_name, bf_suffix, bf_suffix_lower, fl_suffix):
+        stem, ext = os.path.splitext(bf_name)
+        if not stem.lower().endswith(bf_suffix_lower):
+            return None
 
-                img_bf = cv2.imdecode(np.fromfile(os.path.join(self.target_path, bf_name), dtype=np.uint8),
-                                      cv2.IMREAD_UNCHANGED)
-                img_fl = None
-                if run_lipid:
-                    fl_p = os.path.join(self.target_path, fl_name)
-                    if os.path.exists(fl_p):
-                        img_fl = cv2.imdecode(np.fromfile(fl_p, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        return f"{stem[:-len(bf_suffix)]}{fl_suffix}{ext}"
 
-                if img_bf is None:
-                    self.update_status(
-                        f"警告: BF画像の読み込みに失敗しました。スキップします: {bf_name}",
-                        progress_value,
-                        highlight_text=bf_name
-                    )
-                    continue
+    def read_image(self, file_name):
+        image_path = os.path.join(self.target_path, file_name)
+        return cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
 
-                if run_lipid and img_fl is None:
-                    self.update_status(
-                        f"警告: 対応する蛍光画像が見つかりません。スキップします: {fl_name}",
-                        progress_value,
-                        highlight_text=fl_name
-                    )
-                    continue
+    def save_visuals(self, visuals, output_dir, bf_name, prefix_map):
+        for key, image in visuals.items():
+            output_path = os.path.join(output_dir, f"{prefix_map.get(key, '')}{key}_{bf_name}")
+            ext = os.path.splitext(output_path)[1]
+            success, encoded = cv2.imencode(ext, image)
 
-                try:
-                    stats, visuals = self.analyzer.analyze(
-                        img_bf,
-                        img_fl,
-                        run_cell=run_cell,
-                        run_lipid=run_lipid,
-                        progress_callback=None
-                    )
-                except Exception as e:
-                    self.update_status(
-                        f"警告: 解析に失敗しました。スキップします: {bf_name}\n   理由: {e}",
-                        progress_value,
-                        highlight_text=bf_name
-                    )
-                    continue
-
-                    # 個別ログ出力とCSV行作成
-                row = {"ファイル名": bf_name}
-                log_lines = [f"[{i + 1}/{total_files}] {bf_name}"]
-
-                if run_cell:
-                    cells = stats.get("cell_count", 0)
-                    area = stats.get("total_cell_px", 0)
-                    log_lines.append(f"   >>> 細胞数   : {cells} 個")
-                    log_lines.append(f"   >>> 細胞面積 : {area} px")
-                    row.update({"細胞数": cells, "細胞面積(px)": area})
-                    sum_cells += cells
-                    cell_counts.append(cells)
-
-                if run_lipid:
-                    occ = stats.get("lipid_cell_ratio", 0.0)
-                    prod = stats.get("total_production_ratio", 0.0)
-                    in_pct = stats.get("intracellular_lipid_percent", 0.0)
-                    log_lines.append(f"   >>> 油脂占有率     : {occ:.4f}")
-                    log_lines.append(f"   >>> 総生産率       : {prod:.4f}")
-                    log_lines.append(f"   >>> 細胞内油脂割合 : {in_pct * 100:.1f}%")
-                    row.update({"油脂占有率": occ, "総生産率": prod, "細胞内油脂割合(%)": in_pct * 100})
-                    sum_occ += occ
-                    sum_prod += prod
-                    sum_in_pct += in_pct
-                    lipid_occupancies.append(occ)
-
-                self.update_status(
-                    "\n".join(log_lines),
-                    progress_value,
+            if success:
+                encoded.tofile(output_path)
+            else:
+                self.update_log(
+                    f"警告: 結果画像の保存に失敗しました: {output_path}",
                     highlight_text=bf_name
                 )
 
-                for key, img_o in visuals.items():
-                    output_path = os.path.join(output_dir, f"{prefix_map.get(key, '')}{key}_{bf_name}")
-                    ext = os.path.splitext(output_path)[1]
-                    success, encoded = cv2.imencode(ext, img_o)
-                    if success:
-                        encoded.tofile(output_path)
-                    else:
-                        self.update_log(
-                            f"警告: 結果画像の保存に失敗しました: {output_path}",
-                            highlight_text=bf_name
-                        )
+    def build_result_row_and_log(self, bf_name, index, total_files, stats, run_cell, run_lipid, totals):
+        row = {"ファイル名": bf_name}
+        log_lines = [f"[{index + 1}/{total_files}] {bf_name}"]
+
+        if run_cell:
+            cells = stats.get("cell_count", 0)
+            area = stats.get("total_cell_px", 0)
+
+            log_lines.append(f"   >>> 細胞数   : {cells} 個")
+            log_lines.append(f"   >>> 細胞面積 : {area} px")
+
+            row.update({
+                "細胞数": cells,
+                "細胞面積(px)": area
+            })
+
+            totals["sum_cells"] += cells
+            totals["cell_counts"].append(cells)
+
+        if run_lipid:
+            occ = stats.get("lipid_cell_ratio", 0.0)
+            prod = stats.get("total_production_ratio", 0.0)
+            in_pct = stats.get("intracellular_lipid_percent", 0.0)
+
+            log_lines.append(f"   >>> 油脂占有率     : {occ:.4f}")
+            log_lines.append(f"   >>> 総生産率       : {prod:.4f}")
+            log_lines.append(f"   >>> 細胞内油脂割合 : {in_pct * 100:.1f}%")
+
+            row.update({
+                "油脂占有率": occ,
+                "総生産率": prod,
+                "細胞内油脂割合(%)": in_pct * 100
+            })
+
+            totals["sum_occ"] += occ
+            totals["sum_prod"] += prod
+            totals["sum_in_pct"] += in_pct
+            totals["lipid_occupancies"].append(occ)
+
+        return row, "\n".join(log_lines)
+
+    def analyze_single_image(
+        self,
+        index,
+        total_files,
+        bf_name,
+        bf_suffix,
+        bf_suffix_lower,
+        fl_suffix,
+        run_cell,
+        run_lipid,
+        output_dir,
+        prefix_map,
+        totals
+    ):
+        progress_value = (index + 1) / total_files
+
+        fl_name = self.build_fl_name(bf_name, bf_suffix, bf_suffix_lower, fl_suffix)
+        if fl_name is None:
+            self.update_status(
+                f"スキップ: BF識別子が末尾にありません: {bf_name}",
+                progress_value,
+                highlight_text=bf_name
+            )
+            return None
+
+        img_bf = self.read_image(bf_name)
+        img_fl = None
+
+        if run_lipid:
+            fl_path = os.path.join(self.target_path, fl_name)
+            if os.path.exists(fl_path):
+                img_fl = self.read_image(fl_name)
+
+        if img_bf is None:
+            self.update_status(
+                f"警告: BF画像の読み込みに失敗しました。スキップします: {bf_name}",
+                progress_value,
+                highlight_text=bf_name
+            )
+            return None
+
+        if run_lipid and img_fl is None:
+            self.update_status(
+                f"警告: 対応する蛍光画像が見つかりません。スキップします: {fl_name}",
+                progress_value,
+                highlight_text=fl_name
+            )
+            return None
+
+        try:
+            stats, visuals = self.analyzer.analyze(
+                img_bf,
+                img_fl,
+                run_cell=run_cell,
+                run_lipid=run_lipid,
+                progress_callback=None
+            )
+        except Exception as e:
+            self.update_status(
+                f"警告: 解析に失敗しました。スキップします: {bf_name}\n   理由: {e}",
+                progress_value,
+                highlight_text=bf_name
+            )
+            return None
+
+        row, log_message = self.build_result_row_and_log(
+            bf_name,
+            index,
+            total_files,
+            stats,
+            run_cell,
+            run_lipid,
+            totals
+        )
+
+        self.update_status(
+            log_message,
+            progress_value,
+            highlight_text=bf_name
+        )
+
+        self.save_visuals(visuals, output_dir, bf_name, prefix_map)
+
+        return row
+
+    def write_summary(self, summary_rows, totals, processed_count, run_cell, run_lipid, output_dir):
+        if processed_count <= 0:
+            self.update_status(
+                "処理対象の画像がありませんでした。",
+                1.0,
+                enable_start_button=True
+            )
+            return
+
+        summary_log_lines = [
+            "",
+            "-" * 40,
+            "【 全画像 統計サマリー 】"
+        ]
+
+        summary_stat_row = {"ファイル名": "--- 全体統計平均 ---"}
+
+        if run_cell:
+            avg_cells = totals["sum_cells"] / processed_count
+            sd_cells = float(np.std(totals["cell_counts"], ddof=1)) if len(totals["cell_counts"]) > 1 else 0.0
+
+            summary_log_lines.append(f"   [平均]     細胞数 : {avg_cells:.1f} 個")
+            summary_log_lines.append(f"   [標準偏差] 細胞数 : {sd_cells:.2f}")
+
+            summary_stat_row.update({
+                "細胞数": avg_cells,
+                "細胞数標準偏差": sd_cells
+            })
+
+        if run_lipid:
+            avg_occ = totals["sum_occ"] / processed_count
+            avg_prod = totals["sum_prod"] / processed_count
+            avg_dist = (totals["sum_in_pct"] / processed_count) * 100
+            sd_occ = float(np.std(totals["lipid_occupancies"], ddof=1)) if len(totals["lipid_occupancies"]) > 1 else 0.0
+
+            summary_log_lines.append(f"   [平均]     油脂占有率 : {avg_occ:.4f}")
+            summary_log_lines.append(f"   [標準偏差] 油脂占有率 : {sd_occ:.4f}")
+            summary_log_lines.append(f"   [平均] 総生産率       : {avg_prod:.4f}")
+            summary_log_lines.append(f"   [平均] 細胞内油脂割合 : {avg_dist:.1f}%")
+
+            summary_stat_row.update({
+                "油脂占有率": avg_occ,
+                "油脂占有率標準偏差": sd_occ,
+                "総生産率": avg_prod,
+                "細胞内油脂割合(%)": avg_dist
+            })
+
+        summary_log_lines.append("-" * 40)
+        summary_log_lines.append(f"解析結果保存先: {output_dir}")
+
+        summary_rows.append(summary_stat_row)
+
+        pd.DataFrame(summary_rows).to_csv(
+            os.path.join(output_dir, "analysis_summary.csv"),
+            index=False,
+            encoding="utf-8-sig"
+        )
+
+        self.update_status(
+            "\n".join(summary_log_lines),
+            1.0,
+            highlight_text=output_dir,
+            enable_start_button=True
+        )
+
+    def run_analysis(self):
+        """解析ループ：各画像の比率算出と、統計情報の出力を行う"""
+        try:
+            run_cell, run_lipid, bf_suffix, fl_suffix = self.prepare_analysis_context()
+            files, bf_files, bf_suffix_lower = self.collect_image_files(bf_suffix)
+
+            if not bf_files:
+                self.handle_no_bf_images(files, bf_suffix)
+                return
+
+            output_dir = self.create_output_directory()
+            total_files = len(bf_files)
+            prefix_map = {"cell": "01_", "lipid": "02_", "combined": "03_"}
+
+            summary_rows = []
+            totals = {
+                "sum_occ": 0.0,
+                "sum_prod": 0.0,
+                "sum_cells": 0,
+                "sum_in_pct": 0.0,
+                "cell_counts": [],
+                "lipid_occupancies": []
+            }
+            processed_count = 0
+
+            self.update_log(self.build_start_log(total_files, run_lipid))
+
+            for index, bf_name in enumerate(bf_files):
+                row = self.analyze_single_image(
+                    index,
+                    total_files,
+                    bf_name,
+                    bf_suffix,
+                    bf_suffix_lower,
+                    fl_suffix,
+                    run_cell,
+                    run_lipid,
+                    output_dir,
+                    prefix_map,
+                    totals
+                )
+
+                if row is None:
+                    continue
 
                 summary_rows.append(row)
                 processed_count += 1
 
-            # 全体統計の出力
-            if processed_count > 0:
-                summary_log_lines = [
-                    "",
-                    "-" * 40,
-                    "【 全画像 統計サマリー 】"
-                ]
-
-                summary_stat_row = {"ファイル名": "--- 全体統計平均 ---"}
-
-                if run_cell:
-                    avg_cells = sum_cells / processed_count
-                    sd_cells = float(np.std(cell_counts, ddof=1)) if len(cell_counts) > 1 else 0.0
-                    summary_log_lines.append(f"   [平均]     細胞数 : {avg_cells:.1f} 個")
-                    summary_log_lines.append(f"   [標準偏差] 細胞数 : {sd_cells:.2f}")
-                    summary_stat_row.update({
-                        "細胞数": avg_cells,
-                        "細胞数標準偏差": sd_cells
-                    })
-
-                if run_lipid:
-                    avg_occ = sum_occ / processed_count
-                    avg_prod = sum_prod / processed_count
-                    avg_dist = (sum_in_pct / processed_count) * 100
-                    sd_occ = float(np.std(lipid_occupancies, ddof=1)) if len(lipid_occupancies) > 1 else 0.0
-
-                    summary_log_lines.append(f"   [平均]     油脂占有率 : {avg_occ:.4f}")
-                    summary_log_lines.append(f"   [標準偏差] 油脂占有率 : {sd_occ:.4f}")
-                    summary_log_lines.append(f"   [平均] 総生産率       : {avg_prod:.4f}")
-                    summary_log_lines.append(f"   [平均] 細胞内油脂割合 : {avg_dist:.1f}%")
-
-                    summary_stat_row.update({
-                        "油脂占有率": avg_occ,
-                        "油脂占有率標準偏差": sd_occ,
-                        "総生産率": avg_prod,
-                        "細胞内油脂割合(%)": avg_dist
-                    })
-
-                summary_log_lines.append("-" * 40)
-                summary_log_lines.append(f"解析結果保存先: {output_dir}")
-
-                summary_rows.append(summary_stat_row)
-
-                pd.DataFrame(summary_rows).to_csv(
-                    os.path.join(output_dir, "analysis_summary.csv"),
-                    index=False,
-                    encoding='utf-8-sig'
-                )
-
-                self.update_status(
-                    "\n".join(summary_log_lines),
-                    1.0,
-                    highlight_text=output_dir,
-                    enable_start_button=True
-                )
-            else:
-                self.update_status(
-                    "処理対象の画像がありませんでした。",
-                    1.0,
-                    enable_start_button=True
-                )
+            self.write_summary(
+                summary_rows,
+                totals,
+                processed_count,
+                run_cell,
+                run_lipid,
+                output_dir
+            )
 
         except Exception as e:
             self.update_status(
