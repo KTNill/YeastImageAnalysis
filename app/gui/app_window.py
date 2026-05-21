@@ -103,8 +103,11 @@ class App(ctk.CTk):
             finally:
                 completed.set()
 
-        self.after(0, append_and_notify)
-        completed.wait()
+        try:
+            self.after(0, append_and_notify)
+            completed.wait(timeout=2.0)
+        except Exception:
+            completed.set()
 
     def _append_log(self, message, highlight_text=None):
         timestamp = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] "
@@ -151,9 +154,6 @@ class App(ctk.CTk):
 
         self.log_text.see("end")
 
-    def set_progress(self, value):
-        self.after(0, self.progressbar.set, value)
-
     def update_status(self, message=None, progress=None, highlight_text=None, enable_start_button=None):
         self.after(0, self._update_status, message, progress, highlight_text, enable_start_button)
 
@@ -174,11 +174,6 @@ class App(ctk.CTk):
         state = "normal" if enabled else "disabled"
         color = "green" if enabled else "gray"
         self.start_button.configure(state=state, fg_color=color)
-
-    def set_start_button_enabled(self, enabled):
-        state = "normal" if enabled else "disabled"
-        color = "green" if enabled else "gray"
-        self.after(0, self.start_button.configure, {"state": state, "fg_color": color})
 
     def show_error(self, title, message):
         self.after(0, messagebox.showerror, title, message)
@@ -201,7 +196,8 @@ class App(ctk.CTk):
         """解析ループ：各画像の比率算出と、統計情報の出力を行う"""
         try:
             self.update_log(f"設定ファイルを読み込み中: {self.config_data.config_path}")
-            self.config_data.load_config()
+            if not self.config_data.load_config():
+                self.update_log("警告: 設定CSVの読み込みに失敗したため、前回またはデフォルト設定を使用します。")
             self.prepare_analyzer()
 
             run_cell = self.run_cell_var.get()
@@ -440,8 +436,8 @@ class App(ctk.CTk):
 
     def get_analyzer_signature(self):
         return (
-            self.config_data.get("cell_model_path"),
-            self.config_data.get("lipid_model_path"),
+            self._normalize_path_signature(self.config_data.get("cell_model_path")),
+            self._normalize_path_signature(self.config_data.get("lipid_model_path")),
             self.config_data.get("use_gpu"),
         )
 
@@ -452,9 +448,20 @@ class App(ctk.CTk):
 
         if self.analyzer is None or self.analyzer_signature != signature:
             self.update_log_sync("解析モデルを初期化しています。")
-            self.analyzer = YeastAnalyzer(self.config_data)
+            try:
+                analyzer = YeastAnalyzer(self.config_data)
+            except Exception as e:
+                raise RuntimeError(f"解析モデルの初期化に失敗しました: {e}") from e
+
+            self.analyzer = analyzer
             self.analyzer_signature = signature
             self.update_log("解析モデルの初期化が完了しました。")
         else:
             self.update_log("既存の解析モデルを再利用します。")
             self.analyzer.cfg = self.config_data
+
+    @staticmethod
+    def _normalize_path_signature(path):
+        if not path:
+            return ""
+        return os.path.abspath(os.path.normpath(str(path)))

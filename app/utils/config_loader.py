@@ -78,10 +78,14 @@ class ConfigLoader:
                 new_settings[internal_key] = validated_val
 
             self.settings = new_settings
+        
+            return True
         except Exception as e:
             self.logger.error(f"Config load error: {e}")
             if not self.settings:
                 self._apply_all_defaults()
+        
+            return False
 
     def _validate_value(self, key, value, default):
         if pd.isna(value) or str(value).strip() == "":

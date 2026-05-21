@@ -112,7 +112,8 @@ class YeastAnalyzer:
             )
         return results, visuals
 
-    def _parse_color(self, color_str):
+    @staticmethod
+    def _parse_color(color_str):
         if not color_str:
             return None
 
@@ -131,11 +132,13 @@ class YeastAnalyzer:
 
         return None
 
-    def _color_for_id(self, mask_id, salt=0):
+    @staticmethod
+    def _color_for_id(mask_id, salt=0):
         rng = np.random.default_rng((int(mask_id) * 1009) + salt)
         return rng.integers(100, 255, size=3).tolist()
 
-    def _prepare_canvas(self, img):
+    @staticmethod
+    def _prepare_canvas(img):
         if len(img.shape) == 2:
             canvas = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         else:
