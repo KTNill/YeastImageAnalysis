@@ -65,6 +65,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(family="MS Gothic", size=12)
         )
         self.log_text.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
+        self.log_text.tag_config("log_line_spacing", spacing3=5)
         self.log_text.tag_config("filename", foreground="#4DA3FF")
         self.log_text.tag_config("summary_title", foreground="#FFD166")
 
@@ -152,6 +153,7 @@ class App(ctk.CTk):
                 self.log_text.tag_add("summary_title", found_index, found_end)
                 search_start = found_end
 
+        self.log_text.tag_add("log_line_spacing", start_index, "end")
         self.log_text.see("end")
 
     def update_status(self, message=None, progress=None, highlight_text=None, enable_start_button=None):
@@ -252,12 +254,12 @@ class App(ctk.CTk):
 
         if run_lipid:
             start_log_lines.extend([
-                "=" * 55,
+                "=" * 70,
                 "定義確認:",
                 " 1. 油脂占有率 (蓄積度)   = 細胞内の油脂面積 / 細胞の総面積",
                 " 2. 油脂生産率 (効率)     = 全油脂面積 / 細胞の総面積",
                 " 3. 細胞内油脂割合 (分布) = (細胞内の油脂面積 / 全油脂面積) × 100",
-                "=" * 55
+                "=" * 70
             ])
 
         return "\n".join(start_log_lines)
