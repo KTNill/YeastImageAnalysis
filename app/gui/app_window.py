@@ -259,6 +259,7 @@ class App(ctk.CTk):
                 " 1. 油脂占有率 (蓄積度)   = 細胞内の油脂面積 / 細胞の総面積",
                 " 2. 油脂生産率 (効率)     = 全油脂面積 / 細胞の総面積",
                 " 3. 細胞内油脂割合 (分布) = (細胞内の油脂面積 / 全油脂面積) × 100",
+                " 4. 油脂保有細胞割合     = 油脂を含む細胞数 / 全体の細胞数",
                 "=" * 70
             ])
 
@@ -313,21 +314,30 @@ class App(ctk.CTk):
             occ = stats.get("lipid_cell_ratio", 0.0)
             prod = stats.get("total_production_ratio", 0.0)
             in_pct = stats.get("intracellular_lipid_percent", 0.0)
+            lipid_positive_cells = stats.get("lipid_positive_cell_count", 0)
+            lipid_positive_cell_ratio = stats.get("lipid_positive_cell_ratio", 0.0)
 
-            log_lines.append(f"   >>> 油脂占有率     : {occ:.4f}")
-            log_lines.append(f"   >>> 総生産率       : {prod:.4f}")
-            log_lines.append(f"   >>> 細胞内油脂割合 : {in_pct * 100:.1f}%")
+            log_lines.append(f"   >>> 油脂占有率       : {occ:.4f}")
+            log_lines.append(f"   >>> 総生産率         : {prod:.4f}")
+            log_lines.append(f"   >>> 細胞内油脂割合   : {in_pct * 100:.1f}%")
+            log_lines.append(f"   >>> 油脂保有細胞数   : {lipid_positive_cells} 個")
+            log_lines.append(f"   >>> 油脂保有細胞割合 : {lipid_positive_cell_ratio * 100:.1f}%")
 
             row.update({
                 "油脂占有率": occ,
                 "総生産率": prod,
-                "細胞内油脂割合(%)": in_pct * 100
+                "細胞内油脂割合(%)": in_pct * 100,
+                "油脂保有細胞数": lipid_positive_cells,
+                "油脂保有細胞割合(%)": lipid_positive_cell_ratio * 100
             })
 
             totals["sum_occ"] += occ
             totals["sum_prod"] += prod
             totals["sum_in_pct"] += in_pct
+            totals["sum_lipid_positive_cells"] += lipid_positive_cells
+            totals["sum_lipid_positive_cell_ratio"] += lipid_positive_cell_ratio
             totals["lipid_occupancies"].append(occ)
+            totals["lipid_positive_cell_ratios"].append(lipid_positive_cell_ratio)
 
         return row, "\n".join(log_lines)
 
@@ -455,18 +465,30 @@ class App(ctk.CTk):
             avg_occ = totals["sum_occ"] / processed_count
             avg_prod = totals["sum_prod"] / processed_count
             avg_dist = (totals["sum_in_pct"] / processed_count) * 100
+            avg_lipid_positive_cells = totals["sum_lipid_positive_cells"] / processed_count
+            avg_lipid_positive_cell_ratio = (totals["sum_lipid_positive_cell_ratio"] / processed_count) * 100
             sd_occ = float(np.std(totals["lipid_occupancies"], ddof=1)) if len(totals["lipid_occupancies"]) > 1 else 0.0
+            sd_lipid_positive_cell_ratio = (
+                float(np.std(totals["lipid_positive_cell_ratios"], ddof=1)) * 100
+                if len(totals["lipid_positive_cell_ratios"]) > 1 else 0.0
+            )
 
             summary_log_lines.append(f"   [平均]     油脂占有率 : {avg_occ:.4f}")
             summary_log_lines.append(f"   [標準偏差] 油脂占有率 : {sd_occ:.4f}")
             summary_log_lines.append(f"   [平均] 総生産率       : {avg_prod:.4f}")
             summary_log_lines.append(f"   [平均] 細胞内油脂割合 : {avg_dist:.1f}%")
+            summary_log_lines.append(f"   [平均] 油脂保有細胞数 : {avg_lipid_positive_cells:.1f} 個")
+            summary_log_lines.append(f"   [平均] 油脂保有細胞割合 : {avg_lipid_positive_cell_ratio:.1f}%")
+            summary_log_lines.append(f"   [標準偏差] 油脂保有細胞割合 : {sd_lipid_positive_cell_ratio:.2f}")
 
             summary_stat_row.update({
                 "油脂占有率": avg_occ,
                 "油脂占有率標準偏差": sd_occ,
                 "総生産率": avg_prod,
-                "細胞内油脂割合(%)": avg_dist
+                "細胞内油脂割合(%)": avg_dist,
+                "油脂保有細胞数": avg_lipid_positive_cells,
+                "油脂保有細胞割合(%)": avg_lipid_positive_cell_ratio,
+                "油脂保有細胞割合標準偏差": sd_lipid_positive_cell_ratio
             })
 
         summary_log_lines.append("-" * 40)
@@ -507,9 +529,12 @@ class App(ctk.CTk):
                 "sum_prod": 0.0,
                 "sum_cells": 0,
                 "sum_in_pct": 0.0,
+                "sum_lipid_positive_cells": 0,
+                "sum_lipid_positive_cell_ratio": 0.0,
                 "cell_counts": [],
                 "cell_area_means": [],
-                "lipid_occupancies": []
+                "lipid_occupancies": [],
+                "lipid_positive_cell_ratios": []
             }
             processed_count = 0
 

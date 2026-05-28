@@ -98,11 +98,16 @@ class YeastAnalyzer:
             integrated_masks = np.where(cell_masks > 0, lipid_masks, 0)
             integrated_px = int(np.sum(integrated_masks > 0))
             extracellular_px = total_lipid_px - integrated_px
+            lipid_cell_ids = np.unique(cell_masks[np.logical_and(cell_masks > 0, lipid_masks > 0)])
+            lipid_positive_cell_count = int(len(lipid_cell_ids))
+            cell_count = int(results.get("cell_count", 0))
 
             results["lipid_cell_ratio"] = integrated_px / total_cell_px if total_cell_px > 0 else 0.0
             results["total_production_ratio"] = total_lipid_px / total_cell_px if total_cell_px > 0 else 0.0
             results["intracellular_lipid_percent"] = integrated_px / total_lipid_px if total_lipid_px > 0 else 0.0
             results["extracellular_lipid_percent"] = extracellular_px / total_lipid_px if total_lipid_px > 0 else 0.0
+            results["lipid_positive_cell_count"] = lipid_positive_cell_count
+            results["lipid_positive_cell_ratio"] = lipid_positive_cell_count / cell_count if cell_count > 0 else 0.0
             results["integrated_lipid_px"] = integrated_px
             results["extracellular_lipid_px"] = extracellular_px
 
