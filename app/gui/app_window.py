@@ -307,6 +307,7 @@ class App(ctk.CTk):
 
             totals["sum_cells"] += cells
             totals["cell_counts"].append(cells)
+            totals["cell_area_means"].append(area / cells if cells > 0 else 0.0)
 
         if run_lipid:
             occ = stats.get("lipid_cell_ratio", 0.0)
@@ -435,13 +436,19 @@ class App(ctk.CTk):
         if run_cell:
             avg_cells = totals["sum_cells"] / processed_count
             sd_cells = float(np.std(totals["cell_counts"], ddof=1)) if len(totals["cell_counts"]) > 1 else 0.0
+            avg_cell_area = float(np.mean(totals["cell_area_means"])) if totals["cell_area_means"] else 0.0
+            sd_cell_area = float(np.std(totals["cell_area_means"], ddof=1)) if len(totals["cell_area_means"]) > 1 else 0.0
 
             summary_log_lines.append(f"   [平均]     細胞数 : {avg_cells:.1f} 個")
             summary_log_lines.append(f"   [標準偏差] 細胞数 : {sd_cells:.2f}")
+            summary_log_lines.append(f"   [平均]     細胞平均面積 : {avg_cell_area:.2f} px")
+            summary_log_lines.append(f"   [標準偏差] 細胞平均面積 : {sd_cell_area:.2f}")
 
             summary_stat_row.update({
                 "細胞数": avg_cells,
-                "細胞数標準偏差": sd_cells
+                "細胞数標準偏差": sd_cells,
+                "細胞平均面積(px)": avg_cell_area,
+                "細胞平均面積標準偏差": sd_cell_area
             })
 
         if run_lipid:
@@ -501,6 +508,7 @@ class App(ctk.CTk):
                 "sum_cells": 0,
                 "sum_in_pct": 0.0,
                 "cell_counts": [],
+                "cell_area_means": [],
                 "lipid_occupancies": []
             }
             processed_count = 0
