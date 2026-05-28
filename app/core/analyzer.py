@@ -67,7 +67,7 @@ class YeastAnalyzer:
                 min_size=self.cfg.get("cell_min_size")
             )
             total_cell_px = int(np.sum(cell_masks > 0))
-            results["cell_count"] = int(np.max(cell_masks))
+            results["cell_count"] = int(len(np.unique(cell_masks)[1:])) # 0（背景）を除く
             results["total_cell_px"] = total_cell_px
             visuals["cell"] = self._draw_masks(bf_image, cell_masks, True, self.cfg.get("cell_color"))
 
@@ -95,10 +95,11 @@ class YeastAnalyzer:
                     f"cell={cell_masks.shape}, lipid={lipid_masks.shape}"
                 )
 
-            integrated_masks = np.where(cell_masks > 0, lipid_masks, 0)
-            integrated_px = int(np.sum(integrated_masks > 0))
+            intracellular_lipid_mask = np.logical_and(cell_masks > 0, lipid_masks > 0)
+            integrated_px = int(np.sum(intracellular_lipid_mask))
             extracellular_px = total_lipid_px - integrated_px
             lipid_cell_ids = np.unique(cell_masks[np.logical_and(cell_masks > 0, lipid_masks > 0)])
+            lipid_cell_ids = lipid_cell_ids[lipid_cell_ids > 0]  # 確実に0を除外
             lipid_positive_cell_count = int(len(lipid_cell_ids))
             cell_count = int(results.get("cell_count", 0))
 
