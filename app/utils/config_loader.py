@@ -24,6 +24,7 @@ class ConfigLoader:
 
         "統合画像：細胞境界色": {"default": "255,255,255", "desc": "細胞枠の色"},
         "統合画像：油脂色": {"default": "", "desc": "油脂の色"},
+        "統合画像：油脂なし細胞強調": {"default": 1.0, "desc": "1で油脂を持たない細胞を強調表示、0で無効"},
 
         "透過光画像識別子": {"default": "_BF", "desc": "透過光画像識別子"},
         "蛍光画像識別子": {"default": "_FL", "desc": "蛍光画像識別子"},
@@ -45,6 +46,7 @@ class ConfigLoader:
         "油脂マスク色": "lipid_color",
         "統合画像：細胞境界色": "combined_cell_color",
         "統合画像：油脂色": "combined_lipid_color",
+        "統合画像：油脂なし細胞強調": "highlight_lipid_negative_cells",
         "透過光画像識別子": "bf_suffix",
         "蛍光画像識別子": "fl_suffix",
         "GPU使用": "use_gpu"

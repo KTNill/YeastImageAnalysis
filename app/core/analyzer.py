@@ -177,6 +177,7 @@ class YeastAnalyzer:
             else:
                 for i in range(1, max_cell_id + 1):
                     canvas[np.logical_and(bounds, cell_masks == i)] = self._color_for_id(i, salt=10_000)
+
         overlay = canvas.copy()
         max_lipid_id = int(np.max(lipid_masks))
         lipid_color = self._parse_color(lipid_color_str)
@@ -184,4 +185,30 @@ class YeastAnalyzer:
             for i in range(1, max_lipid_id + 1):
                 color = lipid_color if lipid_color is not None else self._color_for_id(i, salt=20_000)
                 overlay[lipid_masks == i] = color
-        return cv2.addWeighted(overlay, 0.5, canvas, 0.5, 0)
+
+        combined = cv2.addWeighted(overlay, 0.5, canvas, 0.5, 0)
+
+        if bool(self.cfg.get("highlight_lipid_negative_cells", 1.0)) and max_cell_id > 0:
+            lipid_positive_cell_ids = set(
+                np.unique(cell_masks[np.logical_and(cell_masks > 0, lipid_masks > 0)]).astype(int).tolist()
+            )
+
+            for cell_id in range(1, max_cell_id + 1):
+                if cell_id in lipid_positive_cell_ids:
+                    continue
+
+                single_cell_mask = (cell_masks == cell_id).astype(np.uint8)
+                contours, _ = cv2.findContours(
+                    single_cell_mask,
+                    cv2.RETR_EXTERNAL,
+                    cv2.CHAIN_APPROX_SIMPLE
+                )
+                cv2.drawContours(
+                    combined,
+                    contours,
+                    -1,
+                    [0, 0, 255],
+                    thickness=3
+                )
+
+        return combined
