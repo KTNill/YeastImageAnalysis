@@ -8,7 +8,7 @@ from skimage.segmentation import find_boundaries
 
 class YeastAnalyzer:
     """
-    透過光(BF)と蛍光(FL)画像を解析し、細胞数および油脂の生産・分布を定量化する。
+    透過光(BF)、蛍光(FL)、PI蛍光(PI)画像を解析し、細胞数および油脂・壊死細胞の分布を定量化する。
     """
 
     def __init__(self, config):
@@ -18,15 +18,12 @@ class YeastAnalyzer:
         use_gpu = bool(config.get("use_gpu"))
         self.device_available = False
 
-        # デバイスの優先順位: CUDA (Win/Linux) > MPS (Mac) > CPU
         if use_gpu and torch.cuda.is_available():
             self.device = "cuda"
             self.device_available = True
-            # 最新の計算最適化をすべて「物理的に」オフにする
             torch.backends.cuda.matmul.allow_tf32 = False
             torch.backends.cudnn.allow_tf32 = False
             torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
-            # 演算を最も原始的で確実な FP32 (Single Precision) に固定
             torch.set_float32_matmul_precision("highest")
         elif use_gpu and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             self.device = "mps"
@@ -39,6 +36,7 @@ class YeastAnalyzer:
         # CellposeModelの初期化
         self.cell_model = self._load_model(config.get("cell_model_path"), "cyto2", "細胞用")
         self.lipid_model = self._load_model(config.get("lipid_model_path"), "cyto2", "油脂用")
+        self.necrosis_model = self._load_model(config.get("necrosis_model_path"), "cyto2", "壊死用")
 
     def _load_model(self, model_path, fallback_model, model_name):
         try:
@@ -51,7 +49,51 @@ class YeastAnalyzer:
             self.logger.error(f"{model_name}モデルの初期化失敗: {e}")
             raise
 
-    def analyze(self, bf_image, fl_image, run_cell=True, run_lipid=True, progress_callback=None):
+    def _apply_cutoff(self, image, threshold):
+        """案1: 指定輝度以下のピクセルを0（黒）にする前処理 (0〜255スケールで指定)"""
+        th_val = float(threshold)
+        if th_val <= 0:
+            return image
+
+        # 画像が16bit(uint16)の場合は、0〜255の閾値を0〜65535スケールに自動変換する
+        if image.dtype == np.uint16:
+            th_val = th_val * (65535.0 / 255.0)
+            max_val = 65535
+        else:
+            max_val = 255
+
+        _, img_clean = cv2.threshold(image, th_val, max_val, cv2.THRESH_TOZERO)
+        return img_clean
+
+    def _filter_masks_by_intensity(self, masks, original_image, intensity_threshold):
+        """案2: マスク内の平均輝度が閾値未満のマスクを除外する後処理 (0〜255スケールで指定)"""
+        th_val = float(intensity_threshold)
+        if th_val <= 0:
+            return masks
+
+        # 画像が16bit(uint16)の場合は、0〜255の閾値を0〜65535スケールに自動変換する
+        if original_image.dtype == np.uint16:
+            th_val = th_val * (65535.0 / 255.0)
+
+        new_masks = np.zeros_like(masks)
+        max_id = int(np.max(masks))
+        current_new_id = 1
+
+        for i in range(1, max_id + 1):
+            mask_area = (masks == i)
+            if not np.any(mask_area):
+                continue
+
+            # マスク領域の元画像における平均輝度を算出
+            mean_intensity = np.mean(original_image[mask_area])
+
+            if mean_intensity >= th_val:
+                new_masks[mask_area] = current_new_id
+                current_new_id += 1
+
+        return new_masks
+
+    def analyze(self, bf_image, fl_image=None, pi_image=None, run_cell=True, run_lipid=True, run_necrosis=False, progress_callback=None):
         results = {}
         visuals = {}
 
@@ -75,19 +117,29 @@ class YeastAnalyzer:
         lipid_masks = None
         total_lipid_px = 0
         if run_lipid and fl_image is not None:
-            if progress_callback: progress_callback(0.5)
+            if progress_callback: progress_callback(0.4)
+
+            # 【案1】前処理：暗いバックグラウンドノイズをカット
+            fl_clean = self._apply_cutoff(fl_image, self.cfg.get("fl_noise_cutoff", 10.0))
+
             lipid_masks, _, _ = self.lipid_model.eval(
-                fl_image, diameter=self.cfg.get("lipid_diameter"), channels=[0, 0],
+                fl_clean, diameter=self.cfg.get("lipid_diameter"), channels=[0, 0],
                 flow_threshold=self.cfg.get("lipid_flow_threshold"),
                 cellprob_threshold=self.cfg.get("lipid_cellprob_threshold"),
                 min_size=self.cfg.get("lipid_min_size")
             )
+
+            # 【案2】後処理：暗すぎる誤検出マスクを除外
+            lipid_masks = self._filter_masks_by_intensity(
+                lipid_masks, fl_image, self.cfg.get("fl_intensity_threshold", 20.0)
+            )
+
             total_lipid_px = int(np.sum(lipid_masks > 0))
             results["lipid_count"] = int(np.max(lipid_masks))
             results["total_lipid_px"] = total_lipid_px
             visuals["lipid"] = self._draw_masks(fl_image, lipid_masks, False, self.cfg.get("lipid_color"))
 
-        # 3. 統合解析（両方のフラグがONの場合のみ実行）
+        # 3. 統合解析（油脂）
         if run_cell and run_lipid and cell_masks is not None and lipid_masks is not None:
             if cell_masks.shape != lipid_masks.shape:
                 raise ValueError(
@@ -113,8 +165,57 @@ class YeastAnalyzer:
 
             visuals["combined"] = self._draw_combined(
                 bf_image, cell_masks, lipid_masks,
-                self.cfg.get("combined_cell_color"), self.cfg.get("combined_lipid_color")
+                self.cfg.get("combined_cell_color"), self.cfg.get("combined_lipid_color"),
+                highlight_flag=bool(self.cfg.get("highlight_lipid_negative_cells", 1.0))
             )
+
+        # 4. 壊死解析（PI蛍光）
+        necrosis_masks = None
+        total_necrosis_px = 0
+        if run_necrosis and pi_image is not None:
+            if progress_callback: progress_callback(0.7)
+
+            # 【案1】前処理：暗いバックグラウンドノイズをカット
+            pi_clean = self._apply_cutoff(pi_image, self.cfg.get("pi_noise_cutoff", 10.0))
+
+            necrosis_masks, _, _ = self.necrosis_model.eval(
+                pi_clean, diameter=self.cfg.get("necrosis_diameter"), channels=[0, 0],
+                flow_threshold=self.cfg.get("necrosis_flow_threshold"),
+                cellprob_threshold=self.cfg.get("necrosis_cellprob_threshold"),
+                min_size=self.cfg.get("necrosis_min_size")
+            )
+
+            # 【案2】後処理：暗すぎる誤検出マスクを除外
+            necrosis_masks = self._filter_masks_by_intensity(
+                necrosis_masks, pi_image, self.cfg.get("pi_intensity_threshold", 20.0)
+            )
+
+            total_necrosis_px = int(np.sum(necrosis_masks > 0))
+            results["necrosis_count"] = int(np.max(necrosis_masks))
+            results["total_necrosis_px"] = total_necrosis_px
+            visuals["necrosis"] = self._draw_masks(pi_image, necrosis_masks, False, self.cfg.get("necrosis_color"))
+
+        # 5. 統合解析（壊死）
+        if run_cell and run_necrosis and cell_masks is not None and necrosis_masks is not None:
+            if cell_masks.shape != necrosis_masks.shape:
+                raise ValueError(
+                    f"細胞マスクと壊死マスクのサイズが一致しません: "
+                    f"cell={cell_masks.shape}, necrosis={necrosis_masks.shape}"
+                )
+
+            necrosis_cell_ids = np.unique(cell_masks[np.logical_and(cell_masks > 0, necrosis_masks > 0)])
+            necrosis_positive_cell_count = int(len(necrosis_cell_ids))
+            cell_count = int(results.get("cell_count", 0))
+
+            results["necrosis_positive_cell_count"] = necrosis_positive_cell_count
+            results["necrosis_positive_cell_ratio"] = necrosis_positive_cell_count / cell_count if cell_count > 0 else 0.0
+
+            visuals["combined_necrosis"] = self._draw_combined(
+                bf_image, cell_masks, necrosis_masks,
+                self.cfg.get("combined_cell_color"), self.cfg.get("combined_necrosis_color"),
+                highlight_flag=bool(self.cfg.get("highlight_necrosis_negative_cells", 1.0))
+            )
+
         return results, visuals
 
     @staticmethod
@@ -166,7 +267,7 @@ class YeastAnalyzer:
             blended[find_boundaries(masks, mode='inner')] = [255, 255, 255]
         return blended
 
-    def _draw_combined(self, img, cell_masks, lipid_masks, cell_color_str, lipid_color_str):
+    def _draw_combined(self, img, cell_masks, sub_masks, cell_color_str, sub_color_str, highlight_flag=False):
         canvas = self._prepare_canvas(img)
         max_cell_id = int(np.max(cell_masks))
         cell_color = self._parse_color(cell_color_str)
@@ -179,22 +280,22 @@ class YeastAnalyzer:
                     canvas[np.logical_and(bounds, cell_masks == i)] = self._color_for_id(i, salt=10_000)
 
         overlay = canvas.copy()
-        max_lipid_id = int(np.max(lipid_masks))
-        lipid_color = self._parse_color(lipid_color_str)
-        if max_lipid_id > 0:
-            for i in range(1, max_lipid_id + 1):
-                color = lipid_color if lipid_color is not None else self._color_for_id(i, salt=20_000)
-                overlay[lipid_masks == i] = color
+        max_sub_id = int(np.max(sub_masks))
+        sub_color = self._parse_color(sub_color_str)
+        if max_sub_id > 0:
+            for i in range(1, max_sub_id + 1):
+                color = sub_color if sub_color is not None else self._color_for_id(i, salt=20_000)
+                overlay[sub_masks == i] = color
 
         combined = cv2.addWeighted(overlay, 0.5, canvas, 0.5, 0)
 
-        if bool(self.cfg.get("highlight_lipid_negative_cells", 1.0)) and max_cell_id > 0:
-            lipid_positive_cell_ids = set(
-                np.unique(cell_masks[np.logical_and(cell_masks > 0, lipid_masks > 0)]).astype(int).tolist()
+        if highlight_flag and max_cell_id > 0:
+            positive_cell_ids = set(
+                np.unique(cell_masks[np.logical_and(cell_masks > 0, sub_masks > 0)]).astype(int).tolist()
             )
 
             for cell_id in range(1, max_cell_id + 1):
-                if cell_id in lipid_positive_cell_ids:
+                if cell_id in positive_cell_ids:
                     continue
 
                 single_cell_mask = (cell_masks == cell_id).astype(np.uint8)

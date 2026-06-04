@@ -21,13 +21,27 @@ class ConfigLoader:
         "油脂確率閾値": {"default": 1.0, "desc": "油脂の確率閾値"},
         "油脂最小サイズ": {"default": 20.0, "desc": "最小油脂ピクセル数"},
         "油脂マスク色": {"default": "", "desc": "油脂の描画色"},
+        "油脂ノイズカット閾値": {"default": 10.0, "desc": "解析前にこの値以下の明るさのピクセルを黒（0）にします。"},
+        "油脂平均輝度閾値": {"default": 20.0, "desc": "検出された油脂領域の平均の明るさがこの値未満ならノイズとして除外します。"},
+
+        "壊死モデルパス": {"default": "", "desc": "壊死細胞認識用Cellposeモデルのパス（空欄はデフォルトのcyto2を使用）"},
+        "壊死径": {"default": 10.0, "desc": "壊死細胞の直径。"},
+        "壊死フロー閾値": {"default": 0.5, "desc": "壊死細胞の形の制限。"},
+        "壊死確率閾値": {"default": 1.0, "desc": "壊死細胞の敏感さ。"},
+        "壊死最小サイズ": {"default": 20.0, "desc": "これより小さい面積のゴミを無視します。"},
+        "壊死マスク色": {"default": "", "desc": "空欄でランダム。指定例: 255,0,255"},
+        "壊死ノイズカット閾値": {"default": 10.0, "desc": "解析前にこの値以下の明るさのピクセルを黒（0）にします。"},
+        "壊死平均輝度閾値": {"default": 20.0, "desc": "検出された壊死領域の平均の明るさがこの値未満ならノイズとして除外します。"},
 
         "統合画像：細胞境界色": {"default": "255,255,255", "desc": "細胞枠の色"},
         "統合画像：油脂色": {"default": "", "desc": "油脂の色"},
+        "統合画像：壊死色": {"default": "", "desc": "空欄でランダム"},
         "統合画像：油脂なし細胞強調": {"default": 1.0, "desc": "1で油脂を持たない細胞を強調表示、0で無効"},
+        "統合画像：生細胞強調": {"default": 1.0, "desc": "1で死んでいない（壊死していない）細胞を強調表示、0で無効"},
 
         "透過光画像識別子": {"default": "_BF", "desc": "透過光画像識別子"},
         "蛍光画像識別子": {"default": "_FL", "desc": "蛍光画像識別子"},
+        "PI蛍光画像識別子": {"default": "_PI", "desc": "PI蛍光（壊死用）画像のファイル名末尾"},
         "GPU使用": {"default": 1.0, "desc": "GPU利用"}
     }
 
@@ -44,11 +58,24 @@ class ConfigLoader:
         "油脂確率閾値": "lipid_cellprob_threshold",
         "油脂最小サイズ": "lipid_min_size",
         "油脂マスク色": "lipid_color",
+        "油脂ノイズカット閾値": "fl_noise_cutoff",
+        "油脂平均輝度閾値": "fl_intensity_threshold",
+        "壊死モデルパス": "necrosis_model_path",
+        "壊死径": "necrosis_diameter",
+        "壊死フロー閾値": "necrosis_flow_threshold",
+        "壊死確率閾値": "necrosis_cellprob_threshold",
+        "壊死最小サイズ": "necrosis_min_size",
+        "壊死マスク色": "necrosis_color",
+        "壊死ノイズカット閾値": "pi_noise_cutoff",
+        "壊死平均輝度閾値": "pi_intensity_threshold",
         "統合画像：細胞境界色": "combined_cell_color",
         "統合画像：油脂色": "combined_lipid_color",
+        "統合画像：壊死色": "combined_necrosis_color",
         "統合画像：油脂なし細胞強調": "highlight_lipid_negative_cells",
+        "統合画像：生細胞強調": "highlight_necrosis_negative_cells",
         "透過光画像識別子": "bf_suffix",
         "蛍光画像識別子": "fl_suffix",
+        "PI蛍光画像識別子": "pi_suffix",
         "GPU使用": "use_gpu"
     }
 
@@ -80,13 +107,13 @@ class ConfigLoader:
                 new_settings[internal_key] = validated_val
 
             self.settings = new_settings
-        
+
             return True
         except Exception as e:
             self.logger.error(f"Config load error: {e}")
             if not self.settings:
                 self._apply_all_defaults()
-        
+
             return False
 
     def _validate_value(self, key, value, default):

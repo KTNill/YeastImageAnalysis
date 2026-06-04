@@ -53,9 +53,14 @@ class App(ctk.CTk):
                                            variable=self.run_lipid_var, command=self.on_lipid_check_changed)
         self.lipid_check.grid(row=3, column=0, padx=20, pady=10, sticky="w")
 
+        self.run_necrosis_var = ctk.BooleanVar(value=False)
+        self.necrosis_check = ctk.CTkCheckBox(self.sidebar_frame, text="壊死解析 (PI)",
+                                              variable=self.run_necrosis_var, command=self.on_necrosis_check_changed)
+        self.necrosis_check.grid(row=4, column=0, padx=20, pady=10, sticky="w")
+
         self.start_button = ctk.CTkButton(self.sidebar_frame, text="解析開始", command=self.start_analysis_thread,
                                           fg_color="green", hover_color="darkgreen")
-        self.start_button.grid(row=4, column=0, padx=20, pady=20)
+        self.start_button.grid(row=5, column=0, padx=20, pady=20)
 
         # ログエリア
         self.log_text = ctk.CTkTextbox(
@@ -77,10 +82,17 @@ class App(ctk.CTk):
     def on_cell_check_changed(self):
         if not self.run_cell_var.get():
             self.run_lipid_var.set(False)
+            self.run_necrosis_var.set(False)
 
     def on_lipid_check_changed(self):
         if self.run_lipid_var.get():
             self.run_cell_var.set(True)
+            self.run_necrosis_var.set(False)
+
+    def on_necrosis_check_changed(self):
+        if self.run_necrosis_var.get():
+            self.run_cell_var.set(True)
+            self.run_lipid_var.set(False)
 
     def select_folder(self):
         path = filedialog.askdirectory()
@@ -203,10 +215,12 @@ class App(ctk.CTk):
 
         run_cell = self.run_cell_var.get()
         run_lipid = self.run_lipid_var.get()
+        run_necrosis = self.run_necrosis_var.get()
         bf_suffix = str(self.config_data.get("bf_suffix", "")).strip()
         fl_suffix = str(self.config_data.get("fl_suffix", "")).strip()
+        pi_suffix = str(self.config_data.get("pi_suffix", "")).strip()
 
-        return run_cell, run_lipid, bf_suffix, fl_suffix
+        return run_cell, run_lipid, run_necrosis, bf_suffix, fl_suffix, pi_suffix
 
     def collect_image_files(self, bf_suffix):
         image_extensions = (".png", ".jpg", ".jpeg", ".tif", ".tiff")
@@ -247,7 +261,7 @@ class App(ctk.CTk):
         shutil.copy(self.config_data.config_path, os.path.join(output_dir, "used_settings.csv"))
         return output_dir
 
-    def build_start_log(self, total_files, run_lipid):
+    def build_start_log(self, total_files, run_lipid, run_necrosis):
         start_log_lines = [
             f"【解析開始: {total_files} セット】"
         ]
@@ -262,15 +276,15 @@ class App(ctk.CTk):
                 " 4. 油脂保有細胞割合     = 油脂を含む細胞数 / 全体の細胞数",
                 "=" * 70
             ])
+        elif run_necrosis:
+            start_log_lines.extend([
+                "=" * 70,
+                "定義確認:",
+                " 1. 壊死細胞割合 = 壊死細胞数 / 全体の細胞数",
+                "=" * 70
+            ])
 
         return "\n".join(start_log_lines)
-
-    def build_fl_name(self, bf_name, bf_suffix, bf_suffix_lower, fl_suffix):
-        stem, ext = os.path.splitext(bf_name)
-        if not stem.lower().endswith(bf_suffix_lower):
-            return None
-
-        return f"{stem[:-len(bf_suffix)]}{fl_suffix}{ext}"
 
     def read_image(self, file_name):
         image_path = os.path.join(self.target_path, file_name)
@@ -290,7 +304,7 @@ class App(ctk.CTk):
                     highlight_text=bf_name
                 )
 
-    def build_result_row_and_log(self, bf_name, index, total_files, stats, run_cell, run_lipid, totals):
+    def build_result_row_and_log(self, bf_name, index, total_files, stats, run_cell, run_lipid, run_necrosis, totals):
         row = {"ファイル名": bf_name}
         log_lines = [f"[{index + 1}/{total_files}] {bf_name}"]
 
@@ -339,26 +353,44 @@ class App(ctk.CTk):
             totals["lipid_occupancies"].append(occ)
             totals["lipid_positive_cell_ratios"].append(lipid_positive_cell_ratio)
 
+        if run_necrosis:
+            necrosis_positive_cells = stats.get("necrosis_positive_cell_count", 0)
+            necrosis_positive_cell_ratio = stats.get("necrosis_positive_cell_ratio", 0.0)
+
+            log_lines.append(f"   >>> 壊死細胞数       : {necrosis_positive_cells} 個")
+            log_lines.append(f"   >>> 壊死細胞割合     : {necrosis_positive_cell_ratio * 100:.1f}%")
+
+            row.update({
+                "壊死細胞数": necrosis_positive_cells,
+                "壊死細胞割合(%)": necrosis_positive_cell_ratio * 100
+            })
+
+            totals["sum_necrosis_positive_cells"] += necrosis_positive_cells
+            totals["sum_necrosis_positive_cell_ratio"] += necrosis_positive_cell_ratio
+            totals["necrosis_positive_cell_ratios"].append(necrosis_positive_cell_ratio)
+
         return row, "\n".join(log_lines)
 
     def analyze_single_image(
-        self,
-        index,
-        total_files,
-        bf_name,
-        bf_suffix,
-        bf_suffix_lower,
-        fl_suffix,
-        run_cell,
-        run_lipid,
-        output_dir,
-        prefix_map,
-        totals
+            self,
+            index,
+            total_files,
+            bf_name,
+            bf_suffix,
+            bf_suffix_lower,
+            fl_suffix,
+            pi_suffix,
+            run_cell,
+            run_lipid,
+            run_necrosis,
+            output_dir,
+            prefix_map,
+            totals
     ):
         progress_value = (index + 1) / total_files
 
-        fl_name = self.build_fl_name(bf_name, bf_suffix, bf_suffix_lower, fl_suffix)
-        if fl_name is None:
+        stem, ext = os.path.splitext(bf_name)
+        if not stem.lower().endswith(bf_suffix_lower):
             self.update_status(
                 f"スキップ: BF識別子が末尾にありません: {bf_name}",
                 progress_value,
@@ -368,11 +400,21 @@ class App(ctk.CTk):
 
         img_bf = self.read_image(bf_name)
         img_fl = None
+        img_pi = None
+        fl_name = None
+        pi_name = None
 
         if run_lipid:
+            fl_name = f"{stem[:-len(bf_suffix)]}{fl_suffix}{ext}"
             fl_path = os.path.join(self.target_path, fl_name)
             if os.path.exists(fl_path):
                 img_fl = self.read_image(fl_name)
+
+        if run_necrosis:
+            pi_name = f"{stem[:-len(bf_suffix)]}{pi_suffix}{ext}"
+            pi_path = os.path.join(self.target_path, pi_name)
+            if os.path.exists(pi_path):
+                img_pi = self.read_image(pi_name)
 
         if img_bf is None:
             self.update_status(
@@ -386,16 +428,26 @@ class App(ctk.CTk):
             self.update_status(
                 f"警告: 対応する蛍光画像が見つかりません。スキップします: {fl_name}",
                 progress_value,
-                highlight_text=fl_name
+                highlight_text=fl_name if fl_name else ""
+            )
+            return None
+
+        if run_necrosis and img_pi is None:
+            self.update_status(
+                f"警告: 対応するPI蛍光画像が見つかりません。スキップします: {pi_name}",
+                progress_value,
+                highlight_text=pi_name if pi_name else ""
             )
             return None
 
         try:
             stats, visuals = self.analyzer.analyze(
-                img_bf,
-                img_fl,
+                bf_image=img_bf,
+                fl_image=img_fl,
+                pi_image=img_pi,
                 run_cell=run_cell,
                 run_lipid=run_lipid,
+                run_necrosis=run_necrosis,
                 progress_callback=None
             )
         except Exception as e:
@@ -413,6 +465,7 @@ class App(ctk.CTk):
             stats,
             run_cell,
             run_lipid,
+            run_necrosis,
             totals
         )
 
@@ -426,7 +479,7 @@ class App(ctk.CTk):
 
         return row
 
-    def write_summary(self, summary_rows, totals, processed_count, run_cell, run_lipid, output_dir):
+    def write_summary(self, summary_rows, totals, processed_count, run_cell, run_lipid, run_necrosis, output_dir):
         if processed_count <= 0:
             self.update_status(
                 "処理対象の画像がありませんでした。",
@@ -491,6 +544,24 @@ class App(ctk.CTk):
                 "油脂保有細胞割合標準偏差": sd_lipid_positive_cell_ratio
             })
 
+        if run_necrosis:
+            avg_necrosis_positive_cells = totals["sum_necrosis_positive_cells"] / processed_count
+            avg_necrosis_positive_cell_ratio = (totals["sum_necrosis_positive_cell_ratio"] / processed_count) * 100
+            sd_necrosis_positive_cell_ratio = (
+                float(np.std(totals["necrosis_positive_cell_ratios"], ddof=1)) * 100
+                if len(totals["necrosis_positive_cell_ratios"]) > 1 else 0.0
+            )
+
+            summary_log_lines.append(f"   [平均] 壊死細胞数 : {avg_necrosis_positive_cells:.1f} 個")
+            summary_log_lines.append(f"   [平均] 壊死細胞割合 : {avg_necrosis_positive_cell_ratio:.1f}%")
+            summary_log_lines.append(f"   [標準偏差] 壊死細胞割合 : {sd_necrosis_positive_cell_ratio:.2f}")
+
+            summary_stat_row.update({
+                "壊死細胞数": avg_necrosis_positive_cells,
+                "壊死細胞割合(%)": avg_necrosis_positive_cell_ratio,
+                "壊死細胞割合標準偏差": sd_necrosis_positive_cell_ratio
+            })
+
         summary_log_lines.append("-" * 40)
         summary_log_lines.append(f"解析結果保存先: {output_dir}")
 
@@ -512,7 +583,7 @@ class App(ctk.CTk):
     def run_analysis(self):
         """解析ループ：各画像の比率算出と、統計情報の出力を行う"""
         try:
-            run_cell, run_lipid, bf_suffix, fl_suffix = self.prepare_analysis_context()
+            run_cell, run_lipid, run_necrosis, bf_suffix, fl_suffix, pi_suffix = self.prepare_analysis_context()
             files, bf_files, bf_suffix_lower = self.collect_image_files(bf_suffix)
 
             if not bf_files:
@@ -521,7 +592,7 @@ class App(ctk.CTk):
 
             output_dir = self.create_output_directory()
             total_files = len(bf_files)
-            prefix_map = {"cell": "01_", "lipid": "02_", "combined": "03_"}
+            prefix_map = {"cell": "01_", "lipid": "02_", "combined": "03_", "necrosis": "02_", "combined_necrosis": "03_"}
 
             summary_rows = []
             totals = {
@@ -531,14 +602,17 @@ class App(ctk.CTk):
                 "sum_in_pct": 0.0,
                 "sum_lipid_positive_cells": 0,
                 "sum_lipid_positive_cell_ratio": 0.0,
+                "sum_necrosis_positive_cells": 0,
+                "sum_necrosis_positive_cell_ratio": 0.0,
                 "cell_counts": [],
                 "cell_area_means": [],
                 "lipid_occupancies": [],
-                "lipid_positive_cell_ratios": []
+                "lipid_positive_cell_ratios": [],
+                "necrosis_positive_cell_ratios": []
             }
             processed_count = 0
 
-            self.update_log(self.build_start_log(total_files, run_lipid))
+            self.update_log(self.build_start_log(total_files, run_lipid, run_necrosis))
 
             for index, bf_name in enumerate(bf_files):
                 row = self.analyze_single_image(
@@ -548,8 +622,10 @@ class App(ctk.CTk):
                     bf_suffix,
                     bf_suffix_lower,
                     fl_suffix,
+                    pi_suffix,
                     run_cell,
                     run_lipid,
+                    run_necrosis,
                     output_dir,
                     prefix_map,
                     totals
@@ -567,6 +643,7 @@ class App(ctk.CTk):
                 processed_count,
                 run_cell,
                 run_lipid,
+                run_necrosis,
                 output_dir
             )
 
@@ -581,6 +658,7 @@ class App(ctk.CTk):
         return (
             self._normalize_path_signature(self.config_data.get("cell_model_path")),
             self._normalize_path_signature(self.config_data.get("lipid_model_path")),
+            self._normalize_path_signature(self.config_data.get("necrosis_model_path")),
             self.config_data.get("use_gpu"),
         )
 
