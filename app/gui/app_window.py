@@ -7,6 +7,9 @@ import cv2
 import pandas as pd
 import numpy as np
 import shutil
+import platform
+import subprocess
+import re
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -24,43 +27,56 @@ class App(ctk.CTk):
         self.config_data = None
         self.target_path = ""
         self.is_running = False
+        self.cancel_requested = False
 
         self.title("酵母・油脂 画像解析システム")
-        self.geometry("900x700")
+        self.geometry("960x700")
 
         # Configure grid layout
+        # サイドバーが配置されている0列目の最小幅を280pxに固定して、メモ入力欄の見切れを防ぎます
+        self.grid_columnconfigure(0, weight=0, minsize=280)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
-        # Sidebar frame
-        self.sidebar_frame = ctk.CTkFrame(self, width=200, corner_radius=0)
+        # Sidebar frame (幅を自動フィットに合わせるためwidthを調整)
+        self.sidebar_frame = ctk.CTkFrame(self, width=260, corner_radius=0)
         self.sidebar_frame.grid(row=0, column=0, rowspan=3, sticky="nsew")
+        self.sidebar_frame.grid_columnconfigure(0, weight=1)
 
         self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="操作パネル", font=ctk.CTkFont(size=20, weight="bold"))
         self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
 
         self.select_button = ctk.CTkButton(self.sidebar_frame, text="画像フォルダを選択", command=self.select_folder)
-        self.select_button.grid(row=1, column=0, padx=20, pady=10)
+        self.select_button.grid(row=1, column=0, padx=20, pady=10, sticky="ew")
+
+        # 実験メモ (提案B) - 見切れない長さのプレースホルダーに修正
+        self.memo_entry = ctk.CTkEntry(self.sidebar_frame, placeholder_text="実験メモ (フォルダ名用)")
+        self.memo_entry.grid(row=2, column=0, padx=20, pady=(10, 0), sticky="ew")
 
         # チェックボックス連動ロジック
         self.run_cell_var = ctk.BooleanVar(value=True)
         self.cell_check = ctk.CTkCheckBox(self.sidebar_frame, text="細胞解析 (BF)",
                                           variable=self.run_cell_var, command=self.on_cell_check_changed)
-        self.cell_check.grid(row=2, column=0, padx=20, pady=10, sticky="w")
+        self.cell_check.grid(row=3, column=0, padx=20, pady=10, sticky="w")
 
         self.run_lipid_var = ctk.BooleanVar(value=True)
         self.lipid_check = ctk.CTkCheckBox(self.sidebar_frame, text="油脂解析 (FL)",
                                            variable=self.run_lipid_var, command=self.on_lipid_check_changed)
-        self.lipid_check.grid(row=3, column=0, padx=20, pady=10, sticky="w")
+        self.lipid_check.grid(row=4, column=0, padx=20, pady=10, sticky="w")
 
         self.run_necrosis_var = ctk.BooleanVar(value=False)
         self.necrosis_check = ctk.CTkCheckBox(self.sidebar_frame, text="壊死解析 (PI)",
                                               variable=self.run_necrosis_var, command=self.on_necrosis_check_changed)
-        self.necrosis_check.grid(row=4, column=0, padx=20, pady=10, sticky="w")
+        self.necrosis_check.grid(row=5, column=0, padx=20, pady=10, sticky="w")
 
-        self.start_button = ctk.CTkButton(self.sidebar_frame, text="解析開始", command=self.start_analysis_thread,
+        # プレビューボタン (提案A)
+        self.preview_button = ctk.CTkButton(self.sidebar_frame, text="1枚テストプレビュー", command=self.run_preview_thread)
+        self.preview_button.grid(row=6, column=0, padx=20, pady=(20, 10), sticky="ew")
+
+        # 解析開始・中止ボタン (提案C)
+        self.start_button = ctk.CTkButton(self.sidebar_frame, text="解析開始", command=self.toggle_analysis,
                                           fg_color="green", hover_color="darkgreen")
-        self.start_button.grid(row=5, column=0, padx=20, pady=20)
+        self.start_button.grid(row=7, column=0, padx=20, pady=(0, 20), sticky="ew")
 
         # ログエリア
         self.log_text = ctk.CTkTextbox(
@@ -99,6 +115,21 @@ class App(ctk.CTk):
         if path:
             self.target_path = path
             self.update_log(f"解析フォルダ設定完了: {path}")
+
+    def _set_ui_state_running_main(self, is_preview=False):
+        """解析中/プレビュー中のUI制御"""
+        self.preview_button.configure(state="disabled")
+        if is_preview:
+            self.start_button.configure(state="disabled", fg_color="gray")
+        else:
+            self.start_button.configure(text="解析中止", fg_color="#cc0000", hover_color="#990000", state="normal")
+
+    def _set_ui_state_stopped_main(self):
+        """停止中のUI制御"""
+        self.preview_button.configure(state="normal")
+        self.start_button.configure(text="解析開始", state="normal", fg_color="green", hover_color="darkgreen")
+        self.cancel_requested = False
+        self.is_running = False
 
     def update_log(self, message, highlight_text=None):
         self.after(0, self._append_log, message, highlight_text)
@@ -179,18 +210,22 @@ class App(ctk.CTk):
             self.progressbar.set(progress)
 
         if enable_start_button is not None:
-            self.is_running = not enable_start_button
-            state = "normal" if enable_start_button else "disabled"
-            color = "green" if enable_start_button else "gray"
-            self.start_button.configure(state=state, fg_color=color)
-
-    def set_start_button_enabled_now(self, enabled):
-        state = "normal" if enabled else "disabled"
-        color = "green" if enabled else "gray"
-        self.start_button.configure(state=state, fg_color=color)
+            if enable_start_button:
+                self._set_ui_state_stopped_main()
+            else:
+                self.is_running = True
 
     def show_error(self, title, message):
         self.after(0, messagebox.showerror, title, message)
+
+    def toggle_analysis(self):
+        """解析開始・中止ボタンの制御"""
+        if self.is_running and not self.cancel_requested:
+            self.cancel_requested = True
+            self.start_button.configure(text="中止処理中...", state="disabled", fg_color="gray")
+            self.update_log("⚠ 解析の中止を要求しました。現在の処理が終わるまでお待ちください...")
+        elif not self.is_running:
+            self.start_analysis_thread()
 
     def start_analysis_thread(self):
         if self.is_running:
@@ -202,9 +237,90 @@ class App(ctk.CTk):
                 return
 
         self.is_running = True
-        self.set_start_button_enabled_now(False)
+        self.cancel_requested = False
+        self.after(0, lambda: self._set_ui_state_running_main(is_preview=False))
 
+        # バックグラウンドスレッドで実行（表示タイミングを元に戻す）
         threading.Thread(target=self.run_analysis, daemon=True).start()
+
+    def run_preview_thread(self):
+        """プレビュー処理の開始スレッド"""
+        if self.is_running:
+            return
+
+        if not self.target_path or not os.path.exists(self.target_path):
+            self.select_folder()
+            if not self.target_path:
+                return
+
+        self.is_running = True
+        self.cancel_requested = False
+        self.after(0, lambda: self._set_ui_state_running_main(is_preview=True))
+
+        # バックグラウンドスレッドで実行（表示タイミングを元に戻す）
+        threading.Thread(target=self.run_preview, daemon=True).start()
+
+    def run_preview(self):
+        """1枚テストプレビューを実行する処理"""
+        try:
+            # 準備処理をバックグラウンドスレッド内で行う（元に戻す）
+            run_cell, run_lipid, run_necrosis, bf_suffix, fl_suffix, pi_suffix = self.prepare_analysis_context()
+            files, bf_files, bf_suffix_lower = self.collect_image_files(bf_suffix)
+
+            if not bf_files:
+                self.handle_no_bf_images(files, bf_suffix)
+                return
+
+            bf_name = bf_files[0]
+            self.update_log(f"【プレビュー実行】先頭の1枚を解析中: {bf_name}")
+
+            # プレビュー用のテンポラリ出力先
+            preview_dir = os.path.join(self.target_path, "preview_temp")
+            os.makedirs(preview_dir, exist_ok=True)
+
+            prefix_map = {"cell": "01_", "lipid": "02_", "combined": "03_", "necrosis": "02_", "combined_necrosis": "03_"}
+
+            # ダミーのtotalsディクショナリ
+            dummy_totals = {
+                "sum_occ": 0.0, "sum_prod": 0.0, "sum_cells": 0, "sum_in_pct": 0.0,
+                "sum_lipid_positive_cells": 0, "sum_lipid_positive_cell_ratio": 0.0,
+                "sum_necrosis_positive_cells": 0, "sum_necrosis_positive_cell_ratio": 0.0,
+                "cell_counts": [], "cell_area_means": [], "lipid_occupancies": [],
+                "total_production_ratios": [], "intracellular_lipid_percents": [],
+                "lipid_positive_cells": [], "lipid_positive_cell_ratios": [],
+                "necrosis_positive_cells": [], "necrosis_positive_cell_ratios": []
+            }
+
+            row = self.analyze_single_image(
+                0, 1, bf_name, bf_suffix, bf_suffix_lower, fl_suffix, pi_suffix,
+                run_cell, run_lipid, run_necrosis, preview_dir, prefix_map, dummy_totals
+            )
+
+            if row is not None:
+                self.update_log("プレビュー画像の生成が完了しました。画像を開きます。")
+                target_key = "combined_necrosis" if run_necrosis else "combined" if run_lipid else "cell"
+
+                filepath = os.path.join(preview_dir, f"{prefix_map.get(target_key, '')}{target_key}_{bf_name}")
+                if os.path.exists(filepath):
+                    self.open_file_in_os(filepath)
+
+        except Exception as e:
+            self.update_status(f"エラー: {e}", enable_start_button=True)
+            self.show_error("エラー", str(e))
+        finally:
+            self.update_status(progress=1.0, enable_start_button=True)
+
+    def open_file_in_os(self, filepath):
+        """OSの標準アプリケーションでファイルを開く"""
+        try:
+            if platform.system() == 'Windows':
+                os.startfile(filepath)
+            elif platform.system() == 'Darwin':
+                subprocess.call(('open', filepath))
+            else:
+                subprocess.call(('xdg-open', filepath))
+        except Exception as e:
+            self.update_log(f"プレビュー画像の表示に失敗しました: {e}")
 
     def prepare_analysis_context(self):
         self.update_log(f"設定ファイルを読み込み中: {self.config_data.config_path}")
@@ -255,8 +371,18 @@ class App(ctk.CTk):
         )
 
     def create_output_directory(self):
+        """出力フォルダの作成。メモが入力されていればフォルダ名に付与する"""
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = os.path.join(self.target_path, f"result_{timestamp}")
+        memo = self.memo_entry.get().strip()
+
+        if memo:
+            # フォルダ名に使えない文字をアンダースコアに置換
+            memo_clean = re.sub(r'[\\/:*?"<>|]+', '_', memo)
+            folder_name = f"result_{memo_clean}_{timestamp}"
+        else:
+            folder_name = f"result_{timestamp}"
+
+        output_dir = os.path.join(self.target_path, folder_name)
         os.makedirs(output_dir, exist_ok=True)
         shutil.copy(self.config_data.config_path, os.path.join(output_dir, "used_settings.csv"))
         return output_dir
@@ -270,17 +396,17 @@ class App(ctk.CTk):
             start_log_lines.extend([
                 "=" * 70,
                 "定義確認:",
-                " 1. 油脂占有率 (蓄積度)   = 細胞内の油脂面積 / 細胞の総面積",
-                " 2. 油脂生産率 (効率)     = 全油脂面積 / 細胞の総面積",
+                " 1. 油脂占有率 (蓄積度)   = 細胞内の油脂面積 / 細胞 of 総面積",
+                " 2. 油脂生産率 (効率)     = 全油脂面積 / 細胞 of 総面積",
                 " 3. 細胞内油脂割合 (分布) = (細胞内の油脂面積 / 全油脂面積) × 100",
-                " 4. 油脂保有細胞割合     = 油脂を含む細胞数 / 全体の細胞数",
+                " 4. 油脂保有細胞割合     = 油脂を含む細胞数 / 全体 of 細胞数",
                 "=" * 70
             ])
         elif run_necrosis:
             start_log_lines.extend([
                 "=" * 70,
                 "定義確認:",
-                " 1. 壊死細胞割合 = 壊死細胞数 / 全体の細胞数",
+                " 1. 壊死細胞割合 = 壊死細胞数 / 全体 of 細胞数",
                 "=" * 70
             ])
 
@@ -583,6 +709,7 @@ class App(ctk.CTk):
     def run_analysis(self):
         """解析ループ：各画像の比率算出と、統計情報の出力を行う"""
         try:
+            # 準備処理をバックグラウンドスレッド内で行う
             run_cell, run_lipid, run_necrosis, bf_suffix, fl_suffix, pi_suffix = self.prepare_analysis_context()
             files, bf_files, bf_suffix_lower = self.collect_image_files(bf_suffix)
 
@@ -615,6 +742,11 @@ class App(ctk.CTk):
             self.update_log(self.build_start_log(total_files, run_lipid, run_necrosis))
 
             for index, bf_name in enumerate(bf_files):
+                # 【キャンセル監視】
+                if self.cancel_requested:
+                    self.update_log("⚠ ユーザー操作により解析が中止されました。")
+                    break
+
                 row = self.analyze_single_image(
                     index,
                     total_files,
