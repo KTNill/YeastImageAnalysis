@@ -32,6 +32,7 @@ class ConfigLoader:
         "壊死マスク色": {"default": "", "desc": "空欄でランダム。指定例: 255,0,255"},
         "壊死ノイズカット閾値": {"default": 10.0, "desc": "解析前にこの値以下の明るさのピクセルを黒（0）にします。"},
         "壊死平均輝度閾値": {"default": 20.0, "desc": "検出された壊死領域の平均の明るさがこの値未満ならノイズとして除外します。"},
+        "壊死最小重複割合": {"default": 0.0, "desc": "細胞面積に対する単一PIマスクの重複割合（0.0〜1.0）。この値未満の被りなら壊死と判定しません。"},
 
         "統合画像：細胞境界色": {"default": "255,255,255", "desc": "細胞枠の色"},
         "統合画像：油脂色": {"default": "", "desc": "油脂の色"},
@@ -68,6 +69,7 @@ class ConfigLoader:
         "壊死マスク色": "necrosis_color",
         "壊死ノイズカット閾値": "pi_noise_cutoff",
         "壊死平均輝度閾値": "pi_intensity_threshold",
+        "壊死最小重複割合": "necrosis_overlap_ratio",
         "統合画像：細胞境界色": "combined_cell_color",
         "統合画像：油脂色": "combined_lipid_color",
         "統合画像：壊死色": "combined_necrosis_color",

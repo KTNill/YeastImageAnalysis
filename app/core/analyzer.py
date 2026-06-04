@@ -119,7 +119,6 @@ class YeastAnalyzer:
         if run_lipid and fl_image is not None:
             if progress_callback: progress_callback(0.4)
 
-            # 【案1】前処理：暗いバックグラウンドノイズをカット
             fl_clean = self._apply_cutoff(fl_image, self.cfg.get("fl_noise_cutoff", 10.0))
 
             lipid_masks, _, _ = self.lipid_model.eval(
@@ -129,7 +128,6 @@ class YeastAnalyzer:
                 min_size=self.cfg.get("lipid_min_size")
             )
 
-            # 【案2】後処理：暗すぎる誤検出マスクを除外
             lipid_masks = self._filter_masks_by_intensity(
                 lipid_masks, fl_image, self.cfg.get("fl_intensity_threshold", 20.0)
             )
@@ -175,7 +173,6 @@ class YeastAnalyzer:
         if run_necrosis and pi_image is not None:
             if progress_callback: progress_callback(0.7)
 
-            # 【案1】前処理：暗いバックグラウンドノイズをカット
             pi_clean = self._apply_cutoff(pi_image, self.cfg.get("pi_noise_cutoff", 10.0))
 
             necrosis_masks, _, _ = self.necrosis_model.eval(
@@ -185,7 +182,6 @@ class YeastAnalyzer:
                 min_size=self.cfg.get("necrosis_min_size")
             )
 
-            # 【案2】後処理：暗すぎる誤検出マスクを除外
             necrosis_masks = self._filter_masks_by_intensity(
                 necrosis_masks, pi_image, self.cfg.get("pi_intensity_threshold", 20.0)
             )
@@ -203,9 +199,40 @@ class YeastAnalyzer:
                     f"cell={cell_masks.shape}, necrosis={necrosis_masks.shape}"
                 )
 
-            necrosis_cell_ids = np.unique(cell_masks[np.logical_and(cell_masks > 0, necrosis_masks > 0)])
-            necrosis_positive_cell_count = int(len(necrosis_cell_ids))
             cell_count = int(results.get("cell_count", 0))
+
+            # 【新規】重複割合の閾値を取得
+            necrosis_overlap_ratio = float(self.cfg.get("necrosis_overlap_ratio", 0.0))
+
+            overlap_mask = np.logical_and(cell_masks > 0, necrosis_masks > 0)
+            overlap_cells = cell_masks[overlap_mask]
+            overlap_necrosis = necrosis_masks[overlap_mask]
+
+            valid_necrosis_cell_ids = []
+
+            if len(overlap_cells) > 0:
+                # 各細胞の総ピクセル数を計算
+                cell_areas = np.bincount(cell_masks.ravel())
+
+                # 重なっている（細胞ID, PIマスクID）のペアごとにピクセル数を集計する
+                max_necrosis_id = int(np.max(necrosis_masks))
+                offset = int(max_necrosis_id + 1)
+
+                # 2つのIDを1つに合成してカウント（オーバーフロー防止のためint64を使用）
+                combined_ids = overlap_cells.astype(np.int64) * offset + overlap_necrosis.astype(np.int64)
+                unique_comb, counts = np.unique(combined_ids, return_counts=True)
+
+                # 合成したIDを元の細胞IDに戻す
+                c_ids = (unique_comb // offset).astype(int)
+
+                # 「それぞれのPIマスクと細胞の重複面積」 ÷ 「細胞自体の面積」
+                ratios = counts / cell_areas[c_ids]
+
+                # 指定した閾値以上の重複を持つ細胞IDだけを抽出
+                valid_mask = ratios >= necrosis_overlap_ratio
+                valid_necrosis_cell_ids = np.unique(c_ids[valid_mask]).tolist()
+
+            necrosis_positive_cell_count = len(valid_necrosis_cell_ids)
 
             results["necrosis_positive_cell_count"] = necrosis_positive_cell_count
             results["necrosis_positive_cell_ratio"] = necrosis_positive_cell_count / cell_count if cell_count > 0 else 0.0
@@ -213,7 +240,8 @@ class YeastAnalyzer:
             visuals["combined_necrosis"] = self._draw_combined(
                 bf_image, cell_masks, necrosis_masks,
                 self.cfg.get("combined_cell_color"), self.cfg.get("combined_necrosis_color"),
-                highlight_flag=bool(self.cfg.get("highlight_necrosis_negative_cells", 1.0))
+                highlight_flag=bool(self.cfg.get("highlight_necrosis_negative_cells", 1.0)),
+                positive_cell_ids=valid_necrosis_cell_ids  # 条件を満たした壊死細胞のみを対象にする
             )
 
         return results, visuals
@@ -267,7 +295,7 @@ class YeastAnalyzer:
             blended[find_boundaries(masks, mode='inner')] = [255, 255, 255]
         return blended
 
-    def _draw_combined(self, img, cell_masks, sub_masks, cell_color_str, sub_color_str, highlight_flag=False):
+    def _draw_combined(self, img, cell_masks, sub_masks, cell_color_str, sub_color_str, highlight_flag=False, positive_cell_ids=None):
         canvas = self._prepare_canvas(img)
         max_cell_id = int(np.max(cell_masks))
         cell_color = self._parse_color(cell_color_str)
@@ -290,12 +318,17 @@ class YeastAnalyzer:
         combined = cv2.addWeighted(overlay, 0.5, canvas, 0.5, 0)
 
         if highlight_flag and max_cell_id > 0:
-            positive_cell_ids = set(
-                np.unique(cell_masks[np.logical_and(cell_masks > 0, sub_masks > 0)]).astype(int).tolist()
-            )
+            # 外部から指定された陽性細胞リストがあれば使い、無ければ全てのかぶっている細胞を取得する
+            if positive_cell_ids is None:
+                positive_cell_ids_set = set(
+                    np.unique(cell_masks[np.logical_and(cell_masks > 0, sub_masks > 0)]).astype(int).tolist()
+                )
+            else:
+                positive_cell_ids_set = set(positive_cell_ids)
 
             for cell_id in range(1, max_cell_id + 1):
-                if cell_id in positive_cell_ids:
+                # 陽性細胞（油脂保有 または 壊死判定された細胞）は赤枠強調をスキップ
+                if cell_id in positive_cell_ids_set:
                     continue
 
                 single_cell_mask = (cell_masks == cell_id).astype(np.uint8)
