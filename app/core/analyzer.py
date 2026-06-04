@@ -111,7 +111,7 @@ class YeastAnalyzer:
             total_cell_px = int(np.sum(cell_masks > 0))
             results["cell_count"] = int(np.max(cell_masks))
             results["total_cell_px"] = total_cell_px
-            visuals["cell"] = self._draw_masks(bf_image, cell_masks, True, self.cfg.get("cell_color"))
+            visuals["cell"] = self._draw_masks(bf_image, cell_masks, True, self.cfg.get("cell_color"), salt=100)
 
         # 2. 油脂解析（蛍光）
         lipid_masks = None
@@ -135,7 +135,7 @@ class YeastAnalyzer:
             total_lipid_px = int(np.sum(lipid_masks > 0))
             results["lipid_count"] = int(np.max(lipid_masks))
             results["total_lipid_px"] = total_lipid_px
-            visuals["lipid"] = self._draw_masks(fl_image, lipid_masks, False, self.cfg.get("lipid_color"))
+            visuals["lipid"] = self._draw_masks(fl_image, lipid_masks, False, self.cfg.get("lipid_color"), salt=200)
 
         # 3. 統合解析（油脂）
         if run_cell and run_lipid and cell_masks is not None and lipid_masks is not None:
@@ -164,6 +164,7 @@ class YeastAnalyzer:
             visuals["combined"] = self._draw_combined(
                 bf_image, cell_masks, lipid_masks,
                 self.cfg.get("combined_cell_color"), self.cfg.get("combined_lipid_color"),
+                cell_salt=100, sub_salt=200,
                 highlight_flag=bool(self.cfg.get("highlight_lipid_negative_cells", 1.0))
             )
 
@@ -189,7 +190,7 @@ class YeastAnalyzer:
             total_necrosis_px = int(np.sum(necrosis_masks > 0))
             results["necrosis_count"] = int(np.max(necrosis_masks))
             results["total_necrosis_px"] = total_necrosis_px
-            visuals["necrosis"] = self._draw_masks(pi_image, necrosis_masks, False, self.cfg.get("necrosis_color"))
+            visuals["necrosis"] = self._draw_masks(pi_image, necrosis_masks, False, self.cfg.get("necrosis_color"), salt=300)
 
         # 5. 統合解析（壊死）
         if run_cell and run_necrosis and cell_masks is not None and necrosis_masks is not None:
@@ -201,7 +202,7 @@ class YeastAnalyzer:
 
             cell_count = int(results.get("cell_count", 0))
 
-            # 【新規】重複割合の閾値を取得
+            # 重複割合の閾値を取得
             necrosis_overlap_ratio = float(self.cfg.get("necrosis_overlap_ratio", 0.0))
 
             overlap_mask = np.logical_and(cell_masks > 0, necrosis_masks > 0)
@@ -240,6 +241,7 @@ class YeastAnalyzer:
             visuals["combined_necrosis"] = self._draw_combined(
                 bf_image, cell_masks, necrosis_masks,
                 self.cfg.get("combined_cell_color"), self.cfg.get("combined_necrosis_color"),
+                cell_salt=100, sub_salt=300,
                 highlight_flag=bool(self.cfg.get("highlight_necrosis_negative_cells", 1.0)),
                 positive_cell_ids=valid_necrosis_cell_ids  # 条件を満たした壊死細胞のみを対象にする
             )
@@ -267,8 +269,18 @@ class YeastAnalyzer:
         return None
 
     @staticmethod
-    def _color_for_id(mask_id, salt=0):
-        rng = np.random.default_rng((int(mask_id) * 1009) + salt)
+    def _color_for_mask(mask_area, salt=0):
+        """マスク領域の『重心座標』をシードにして色を決定する"""
+        y_coords, x_coords = np.where(mask_area)
+        if len(y_coords) == 0:
+            return [128, 128, 128]  # 万が一空の場合はグレー
+
+        cy = int(np.mean(y_coords))
+        cx = int(np.mean(x_coords))
+
+        # 順番(ID)がシャッフルされても、同じ位置のマスクは必ず同じ色になる
+        seed = (cy * 1009 + cx * 137 + salt) % (2 ** 31 - 1)
+        rng = np.random.default_rng(seed)
         return rng.integers(100, 255, size=3).tolist()
 
     @staticmethod
@@ -281,39 +293,54 @@ class YeastAnalyzer:
             canvas = cv2.normalize(canvas, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
         return canvas
 
-    def _draw_masks(self, img, masks, highlight_boundaries, color_str):
+    def _draw_masks(self, img, masks, highlight_boundaries, color_str, salt=0):
         canvas = self._prepare_canvas(img)
         overlay = canvas.copy()
         max_id = int(np.max(masks))
         base_color = self._parse_color(color_str)
+
         if max_id > 0:
             for i in range(1, max_id + 1):
-                color = base_color if base_color is not None else self._color_for_id(i)
-                overlay[masks == i] = color
+                mask_area = (masks == i)
+                if not np.any(mask_area):
+                    continue
+                # IDではなく、重心位置をもとに色を付ける
+                color = base_color if base_color is not None else self._color_for_mask(mask_area, salt)
+                overlay[mask_area] = color
+
         blended = cv2.addWeighted(overlay, 0.4, canvas, 0.6, 0)
         if highlight_boundaries and max_id > 0:
             blended[find_boundaries(masks, mode='inner')] = [255, 255, 255]
         return blended
 
-    def _draw_combined(self, img, cell_masks, sub_masks, cell_color_str, sub_color_str, highlight_flag=False, positive_cell_ids=None):
+    def _draw_combined(self, img, cell_masks, sub_masks, cell_color_str, sub_color_str, cell_salt=100, sub_salt=200, highlight_flag=False, positive_cell_ids=None):
         canvas = self._prepare_canvas(img)
         max_cell_id = int(np.max(cell_masks))
         cell_color = self._parse_color(cell_color_str)
+
         if max_cell_id > 0:
             bounds = find_boundaries(cell_masks, mode='inner')
             if cell_color is not None:
                 canvas[bounds] = cell_color
             else:
                 for i in range(1, max_cell_id + 1):
-                    canvas[np.logical_and(bounds, cell_masks == i)] = self._color_for_id(i, salt=10_000)
+                    mask_area = (cell_masks == i)
+                    if not np.any(mask_area):
+                        continue
+                    color = self._color_for_mask(mask_area, salt=cell_salt)
+                    canvas[np.logical_and(bounds, mask_area)] = color
 
         overlay = canvas.copy()
         max_sub_id = int(np.max(sub_masks))
         sub_color = self._parse_color(sub_color_str)
+
         if max_sub_id > 0:
             for i in range(1, max_sub_id + 1):
-                color = sub_color if sub_color is not None else self._color_for_id(i, salt=20_000)
-                overlay[sub_masks == i] = color
+                mask_area = (sub_masks == i)
+                if not np.any(mask_area):
+                    continue
+                color = sub_color if sub_color is not None else self._color_for_mask(mask_area, salt=sub_salt)
+                overlay[mask_area] = color
 
         combined = cv2.addWeighted(overlay, 0.5, canvas, 0.5, 0)
 
