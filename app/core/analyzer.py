@@ -49,8 +49,33 @@ class YeastAnalyzer:
             self.logger.error(f"{model_name}モデルの初期化失敗: {e}")
             raise
 
+    def _apply_clip(self, image, clip_val):
+        """極端に明るいピクセルを頭打ちにし、薄いシグナルの埋没を防ぐ前処理 (0〜255スケール)"""
+        val = float(clip_val)
+        if val >= 255.0 or val <= 0:
+            return image
+
+        if image.dtype == np.uint16:
+            val = val * (65535.0 / 255.0)
+
+        return np.minimum(image, val).astype(image.dtype)
+
+    def _apply_gamma(self, image, gamma):
+        """ガンマ補正をかけて中間輝度（にじみ）を暗く潰す前処理"""
+        g = float(gamma)
+        if g == 1.0 or g <= 0:
+            return image
+
+        # 画像の型に応じてスケールを調整
+        max_val = 65535.0 if image.dtype == np.uint16 else 255.0
+        normalized = image.astype(np.float32) / max_val
+
+        # ガンマ累乗 (g > 1.0 のとき中輝度が暗くなる)
+        corrected = np.power(normalized, g)
+        return np.clip(corrected * max_val, 0, max_val).astype(image.dtype)
+
     def _apply_cutoff(self, image, threshold):
-        """案1: 指定輝度以下のピクセルを0（黒）にする前処理 (0〜255スケールで指定)"""
+        """指定輝度以下のピクセルを0（黒）にする前処理 (0〜255スケールで指定)"""
         th_val = float(threshold)
         if th_val <= 0:
             return image
@@ -66,7 +91,7 @@ class YeastAnalyzer:
         return img_clean
 
     def _filter_masks_by_intensity(self, masks, original_image, intensity_threshold):
-        """案2: マスク内の平均輝度が閾値未満のマスクを除外する後処理 (0〜255スケールで指定)"""
+        """マスク内の平均輝度が閾値未満のマスクを除外する後処理 (0〜255スケールで指定)"""
         th_val = float(intensity_threshold)
         if th_val <= 0:
             return masks
@@ -119,7 +144,10 @@ class YeastAnalyzer:
         if run_lipid and fl_image is not None:
             if progress_callback: progress_callback(0.4)
 
-            fl_clean = self._apply_cutoff(fl_image, self.cfg.get("fl_noise_cutoff", 10.0))
+            # 前処理：輝度上限カット -> ガンマ補正 -> ノイズカットの3段階パイプライン
+            fl_clean = self._apply_clip(fl_image, self.cfg.get("fl_intensity_clip", 255.0))
+            fl_clean = self._apply_gamma(fl_clean, self.cfg.get("fl_gamma", 1.0))
+            fl_clean = self._apply_cutoff(fl_clean, self.cfg.get("fl_noise_cutoff", 10.0))
 
             lipid_masks, _, _ = self.lipid_model.eval(
                 fl_clean, diameter=self.cfg.get("lipid_diameter"), channels=[0, 0],
@@ -174,7 +202,10 @@ class YeastAnalyzer:
         if run_necrosis and pi_image is not None:
             if progress_callback: progress_callback(0.7)
 
-            pi_clean = self._apply_cutoff(pi_image, self.cfg.get("pi_noise_cutoff", 10.0))
+            # 前処理：輝度上限カット -> ガンマ補正 -> ノイズカットの3段階パイプライン
+            pi_clean = self._apply_clip(pi_image, self.cfg.get("pi_intensity_clip", 255.0))
+            pi_clean = self._apply_gamma(pi_clean, self.cfg.get("pi_gamma", 1.0))
+            pi_clean = self._apply_cutoff(pi_clean, self.cfg.get("pi_noise_cutoff", 10.0))
 
             necrosis_masks, _, _ = self.necrosis_model.eval(
                 pi_clean, diameter=self.cfg.get("necrosis_diameter"), channels=[0, 0],
