@@ -42,11 +42,21 @@ class YeastAnalyzer:
         try:
             from cellpose.models import CellposeModel
 
-            if model_path and os.path.exists(model_path):
-                return CellposeModel(gpu=self.device_available, pretrained_model=model_path)
+            if model_path:
+                if os.path.exists(model_path):
+                    self.logger.info(f"【{model_name}】カスタムモデルをロードします: {model_path}")
+                    return CellposeModel(gpu=self.device_available, pretrained_model=model_path)
+                else:
+                    self.logger.warning(
+                        f"【{model_name}】指定されたカスタムモデルのパスが存在しません: {model_path}。 "
+                        f"デフォルトモデル（{fallback_model}）にフォールバックします。"
+                    )
+            else:
+                self.logger.info(f"【{model_name}】デフォルトモデル（{fallback_model}）をロードします。")
+
             return CellposeModel(gpu=self.device_available, model_type=fallback_model)
         except Exception as e:
-            self.logger.error(f"{model_name}モデルの初期化失敗: {e}")
+            self.logger.error(f"【{model_name}】モデルの初期化失敗: {e}")
             raise
 
     def _apply_clip(self, image, clip_val):
@@ -74,20 +84,48 @@ class YeastAnalyzer:
         corrected = np.power(normalized, g)
         return np.clip(corrected * max_val, 0, max_val).astype(image.dtype)
 
-    def _apply_cutoff(self, image, threshold):
-        """指定輝度以下のピクセルを0（黒）にする前処理 (0〜255スケールで指定)"""
+    def _apply_cutoff(self, image, threshold, fade_width):
+        """指定輝度以下のピクセルを減衰させる前処理 (0〜255スケール、ぼかし幅指定によるS字減衰対応)"""
         th_val = float(threshold)
+        w_val = float(fade_width)
+
         if th_val <= 0:
             return image
 
         # 画像が16bit(uint16)の場合は、0〜255の閾値を0〜65535スケールに自動変換する
         if image.dtype == np.uint16:
             th_val = th_val * (65535.0 / 255.0)
-            max_val = 65535
+            w_val = w_val * (65535.0 / 255.0)
+            max_val = 65535.0
         else:
-            max_val = 255
+            max_val = 255.0
 
-        _, img_clean = cv2.threshold(image, th_val, max_val, cv2.THRESH_TOZERO)
+        # ぼかし幅が0以下、または閾値自体がぼかし幅の半分以下の場合は、従来通りのハードカット
+        if w_val <= 0 or th_val <= (w_val / 2.0):
+            _, img_clean = cv2.threshold(image, th_val, max_val, cv2.THRESH_TOZERO)
+            return img_clean
+
+        # ソフト閾値範囲：[lower, upper] の範囲でグラデーション消退させる
+        lower = th_val - (w_val / 2.0)
+        upper = th_val + (w_val / 2.0)
+
+        lower = max(0.0, lower)
+        upper = min(max_val, upper)
+        range_width = upper - lower
+
+        if range_width <= 0:
+            _, img_clean = cv2.threshold(image, th_val, max_val, cv2.THRESH_TOZERO)
+            return img_clean
+
+        img_float = image.astype(np.float32)
+
+        # 正規化ファクター t: [0.0, 1.0]
+        t = np.clip((img_float - lower) / range_width, 0.0, 1.0)
+
+        # Smoothstep (エルミート補間) を用いた、S字型の滑らかなグラデーション係数
+        k = t * t * (3.0 - 2.0 * t)
+
+        img_clean = (img_float * k).astype(image.dtype)
         return img_clean
 
     def _filter_masks_by_intensity(self, masks, original_image, intensity_threshold):
@@ -144,10 +182,10 @@ class YeastAnalyzer:
         if run_lipid and fl_image is not None:
             if progress_callback: progress_callback(0.4)
 
-            # 前処理：輝度上限カット -> ガンマ補正 -> ノイズカットの3段階パイプライン
+            # 前処理：輝度上限カット -> ガンマ補正 -> ノイズカット（グラデーション対応）
             fl_clean = self._apply_clip(fl_image, self.cfg.get("fl_intensity_clip", 255.0))
             fl_clean = self._apply_gamma(fl_clean, self.cfg.get("fl_gamma", 1.0))
-            fl_clean = self._apply_cutoff(fl_clean, self.cfg.get("fl_noise_cutoff", 10.0))
+            fl_clean = self._apply_cutoff(fl_clean, self.cfg.get("fl_noise_cutoff", 10.0), self.cfg.get("fl_noise_fade_width", 0.0))
 
             lipid_masks, _, _ = self.lipid_model.eval(
                 fl_clean, diameter=self.cfg.get("lipid_diameter"), channels=[0, 0],
@@ -202,10 +240,10 @@ class YeastAnalyzer:
         if run_necrosis and pi_image is not None:
             if progress_callback: progress_callback(0.7)
 
-            # 前処理：輝度上限カット -> ガンマ補正 -> ノイズカットの3段階パイプライン
+            # 前処理：輝度上限カット -> ガンマ補正 -> ノイズカット（グラデーション対応）
             pi_clean = self._apply_clip(pi_image, self.cfg.get("pi_intensity_clip", 255.0))
             pi_clean = self._apply_gamma(pi_clean, self.cfg.get("pi_gamma", 1.0))
-            pi_clean = self._apply_cutoff(pi_clean, self.cfg.get("pi_noise_cutoff", 10.0))
+            pi_clean = self._apply_cutoff(pi_clean, self.cfg.get("pi_noise_cutoff", 10.0), self.cfg.get("pi_noise_fade_width", 0.0))
 
             necrosis_masks, _, _ = self.necrosis_model.eval(
                 pi_clean, diameter=self.cfg.get("necrosis_diameter"), channels=[0, 0],
@@ -257,7 +295,7 @@ class YeastAnalyzer:
                 # 合成したIDを元の細胞IDに戻す
                 c_ids = (unique_comb // offset).astype(int)
 
-                # 「それぞれのPIマスクと細胞の重複面積」 ÷ 「細胞自体の面積」
+                # 「それぞれのPIマスクと細胞 of 重複面積」 ÷ 「細胞自体の面積」
                 ratios = counts / cell_areas[c_ids]
 
                 # 指定した閾値以上の重複を持つ細胞IDだけを抽出
@@ -309,7 +347,7 @@ class YeastAnalyzer:
         cy = int(np.mean(y_coords))
         cx = int(np.mean(x_coords))
 
-        # 順番(ID)がシャッフルされても、同じ位置のマスクは必ず同じ色になる
+        # 順番(ID)がシャッフルされても、同じ位置 of マスクは必ず同じ色になる
         seed = (cy * 1009 + cx * 137 + salt) % (2 ** 31 - 1)
         rng = np.random.default_rng(seed)
         return rng.integers(100, 255, size=3).tolist()
