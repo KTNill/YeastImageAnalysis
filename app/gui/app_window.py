@@ -6,13 +6,13 @@ import datetime
 import cv2
 import pandas as pd
 import numpy as np
-import shutil
 import platform
 import subprocess
 import re
 import queue
 from app.core.analyzer import YeastAnalyzer, LogCategory
 
+# GUIの基本外観設定
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
@@ -20,7 +20,7 @@ ctk.set_default_color_theme("blue")
 class App(ctk.CTk):
     """
     最終安定版GUI。
-    エラーの原因となるtag_configのfont指定を排除し、配色とリアルタイム描画を最適化。
+    ウィンドウを閉じた際、os._exit(0)によりプロセスを即座に強制終了するハードキル機構を実装。
     """
 
     IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".tif", ".tiff")
@@ -34,6 +34,9 @@ class App(ctk.CTk):
         self.cancel_requested = False
         self.msg_queue = queue.Queue()
 
+        # ウィンドウの「×」ボタンが押された際、クリーンアップを無視して即座にOSレベルで終了する
+        self.protocol("WM_DELETE_WINDOW", self._hard_kill)
+
         self.title("酵母・油脂 画像解析システム (Refactored)")
         self.geometry("1100x750")
 
@@ -46,6 +49,13 @@ class App(ctk.CTk):
         self._setup_main_area()
         self.after(100, self.process_msg_queue)
 
+    def _hard_kill(self):
+        """
+        OSレベルでの即時強制終了。
+        スレッドの終了待機やfinallyブロック、例外処理を一切介さずプロセスを破棄します。
+        """
+        os._exit(0)
+
     def _setup_sidebar(self):
         self.sidebar_frame = ctk.CTkFrame(self, width=320, corner_radius=0)
         self.sidebar_frame.grid(row=0, column=0, rowspan=3, sticky="nsew")
@@ -54,7 +64,7 @@ class App(ctk.CTk):
         self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="操作パネル", font=ctk.CTkFont(size=22, weight="bold"))
         self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
 
-        # 現在の状況を示すステータステキスト
+        # ステータステキスト
         self.status_label = ctk.CTkLabel(
             self.sidebar_frame,
             text="< 待機中 >",
@@ -139,7 +149,7 @@ class App(ctk.CTk):
                     self._set_ui_state(msg["state"], msg.get("mode"))
 
                 self.msg_queue.task_done()
-                self.update_idletasks()  # 再描画を強制
+                self.update_idletasks()
         except queue.Empty:
             pass
         finally:
@@ -236,6 +246,7 @@ class App(ctk.CTk):
             if not self.target_path: self.select_folder()
             if not self.target_path: return
             self.msg_queue.put({"type": "ui_state", "state": True, "mode": "analysis"})
+            # ワーカースレッドをデーモン化
             threading.Thread(target=self.run_analysis_logic, args=(self.run_cell_var.get(), self.run_lipid_var.get(), self.run_necrosis_var.get(), self.memo_entry.get().strip()), daemon=True).start()
 
     def run_preview_thread(self):
@@ -243,6 +254,7 @@ class App(ctk.CTk):
         if not self.target_path: self.select_folder()
         if not self.target_path: return
         self.msg_queue.put({"type": "ui_state", "state": True, "mode": "preview"})
+        # ワーカースレッドをデーモン化
         threading.Thread(target=self.run_preview_logic, args=(self.run_cell_var.get(), self.run_lipid_var.get(), self.run_necrosis_var.get(), self.preview_target_var.get()), daemon=True).start()
 
     def run_analysis_logic(self, run_cell, run_lipid, run_necrosis, memo):
@@ -268,7 +280,7 @@ class App(ctk.CTk):
                     def_msg += " 1. 油脂占有率 (蓄積度)   = 細胞内の油脂面積 / 細胞の総面積\n" \
                                " 2. 油脂生産率 (効率)     = 全油脂面積 / 細胞の総面積\n" \
                                " 3. 細胞内油脂割合 (分布) = (細胞内の油脂面積 / 全油脂面積) × 100\n" \
-                               " 4. 油脂保有細胞割合     = 油脂を含む細胞数 / 全体の細胞数\n"
+                               " 4. 油脂保有細胞割合      = (油脂を含む細胞数 / 全体の細胞数) × 100\n"
                 if run_necrosis:
                     def_msg += " 1. 壊死細胞割合 = 壊死細胞数 / 全体の細胞数\n"
                 def_msg += "=" * 70
@@ -281,7 +293,6 @@ class App(ctk.CTk):
                     self.queue_log("ユーザー操作により解析が中止されました。", LogCategory.WARNING)
                     break
 
-                # 進捗修正：処理開始時に (idx / total) を表示（2枚なら1枚目開始で0%）
                 self.msg_queue.put({"type": "progress", "value": idx / total_count})
                 row = self._proc_img(idx, total_count, name, bf_s, fl_s, pi_s, run_cell, run_lipid, run_necrosis, out_dir, totals)
                 if row: rows.append(row)
@@ -304,7 +315,7 @@ class App(ctk.CTk):
             if not bf_files: return
 
             self.msg_queue.put({"type": "progress", "value": 0.2})
-            out = os.path.join(self.target_path, "preview_temp");
+            out = os.path.join(self.target_path, "preview_temp")
             os.makedirs(out, exist_ok=True)
             self.queue_log(f"【プレビュー実行】先頭の1枚を解析中: {bf_files[0]}", LogCategory.EVENT_START, metadata={"filename": bf_files[0]})
 
@@ -326,17 +337,17 @@ class App(ctk.CTk):
             self.msg_queue.put({"type": "ui_state", "state": False})
 
     def _proc_img(self, idx, total, bf_name, bf_s, fl_s, pi_s, run_c, run_l, run_n, out_dir, totals):
-        stem, ext = os.path.splitext(bf_name);
+        stem, ext = os.path.splitext(bf_name)
         img_bf = self._read_img(bf_name)
         img_fl, img_pi = None, None
         if run_l:
-            fl_n = f"{stem[:-len(bf_s)]}{fl_s}{ext}";
+            fl_n = f"{stem[:-len(bf_s)]}{fl_s}{ext}"
             img_fl = self._read_img(fl_n)
             if img_fl is None:
                 self.queue_log(f"警告: 油脂用画像が見つかりません。スキップします: {fl_n}", LogCategory.WARNING, metadata={"filename": fl_n});
                 return None
         if run_n:
-            pi_n = f"{stem[:-len(bf_s)]}{pi_s}{ext}";
+            pi_n = f"{stem[:-len(bf_s)]}{pi_s}{ext}"
             img_pi = self._read_img(pi_n)
             if img_pi is None:
                 self.queue_log(f"警告: 壊死用画像が見つかりません。スキップします: {pi_n}", LogCategory.WARNING, metadata={"filename": pi_n});
@@ -346,7 +357,7 @@ class App(ctk.CTk):
         stats, visuals = self.analyzer.analyze(img_bf, img_fl, img_pi, run_c, run_l, run_n)
         prefixes = {"cell": "01_", "lipid_clean": "00_clean_", "lipid": "02_", "combined": "03_", "necrosis_clean": "00_clean_", "necrosis": "02_", "combined_necrosis": "03_"}
         for k, v in visuals.items():
-            p = os.path.join(out_dir, f"{prefixes.get(k, '')}{k}_{bf_name}");
+            p = os.path.join(out_dir, f"{prefixes.get(k, '')}{k}_{bf_name}")
             cv2.imencode(os.path.splitext(p)[1], v)[1].tofile(p)
         return self._build_row_and_log(bf_name, idx, total, stats, run_c, run_l, run_n, totals)
 
@@ -354,7 +365,7 @@ class App(ctk.CTk):
         row, log = {"ファイル名": name}, [f"[{idx + 1}/{total}] {name}"]
         cells = stats.get("cell_count", 0) if run_c else 0
         if run_c:
-            a = stats.get("total_cell_px", 0);
+            a = stats.get("total_cell_px", 0)
             log.append(f"   >>> 細胞数   : {cells} 個\n   >>> 細胞面積 : {a} px")
             row.update({"細胞数": cells, "細胞面積(px)": a});
             totals["cell_counts"].append(cells)
@@ -367,15 +378,18 @@ class App(ctk.CTk):
             log.append(f"   >>> 油脂占有率       : {occ:.4f}\n   >>> 総生産率         : {prd:.4f}\n   >>> 細胞内油脂割合   : {inp * 100:.1f}%\n   >>> 油脂保有細胞数   : {lpcc} 個\n   >>> 油脂保有細胞割合 : {lpcr * 100:.1f}%")
             row.update({"油脂占有率": occ, "総生産率": prd, "細胞内油脂割合(%)": inp * 100, "油脂保有細胞数": lpcc, "油脂保有細胞割合(%)": lpcr * 100})
             totals["lipid_positive_cells"].append(lpcc)
-            if cells > 0: totals["lipid_occupancies"].append(occ); totals["total_production_ratios"].append(prd); totals["lipid_positive_cell_ratios"].append(lpcr)
+            if cells > 0:
+                totals["lipid_occupancies"].append(occ)
+                totals["total_production_ratios"].append(prd)
+                totals["lipid_positive_cell_ratios"].append(lpcr)
             if stats.get("total_lipid_px", 0) > 0: totals["intracellular_lipid_percents"].append(inp)
         if run_n:
             npcc, npcr = stats.get("necrosis_positive_cell_count", 0), stats.get("necrosis_positive_cell_ratio", 0.0)
             log.append(f"   >>> 壊死細胞数       : {npcc} 個\n   >>> 壊死細胞割合     : {npcr * 100:.1f}%")
-            row.update({"壊死細胞数": npcc, "壊死細胞割合(%)": npcr * 100});
+            row.update({"壊死細胞数": npcc, "壊死細胞割合(%)": npcr * 100})
             totals["necrosis_positive_cells"].append(npcc)
             if cells > 0: totals["necrosis_positive_cell_ratios"].append(npcr)
-        self.queue_log("\n".join(log), LogCategory.NORMAL, metadata={"filename": name});
+        self.queue_log("\n".join(log), LogCategory.NORMAL, metadata={"filename": name})
         return row
 
     def _write_summary(self, rows, totals, count, run_c, run_l, run_n, out_dir):
@@ -399,17 +413,17 @@ class App(ctk.CTk):
             sum_log.extend([f"   [平均] 壊死細胞数 : {avg_n:.1f} 個", f"   [平均] 壊死細胞割合 : {avg_nr:.1f}%", f"   [標準偏差] 壊死細胞割合 : {sd_nr:.2f}"])
             stat_row.update({"壊死細胞数": avg_n, "壊死細胞割合(%)": avg_nr, "壊死細胞割合標準偏差": sd_nr})
 
-        sum_log.append("-" * 40);
+        sum_log.append("-" * 40)
         self.queue_log("\n".join(sum_log), LogCategory.EVENT_END)
-        self.queue_log(f"解析結果保存先: {out_dir}", LogCategory.NORMAL);
+        self.queue_log(f"解析結果保存先: {out_dir}", LogCategory.NORMAL)
         rows.append(stat_row)
         pd.DataFrame(rows).to_csv(os.path.join(out_dir, "analysis_summary.csv"), index=False, encoding="utf-8-sig")
 
     def _create_out_dir(self, memo):
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         f = f"result_{re.sub(r'[\\/:*?\"<>|]+', '_', memo)}_{ts}" if memo else f"result_{ts}"
-        p = os.path.join(self.target_path, f);
-        os.makedirs(p, exist_ok=True);
+        p = os.path.join(self.target_path, f)
+        os.makedirs(p, exist_ok=True)
         return p
 
     def _init_totals(self):
