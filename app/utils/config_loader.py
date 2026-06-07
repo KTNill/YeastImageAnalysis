@@ -20,7 +20,7 @@ class ConfigLoader:
         "統合画像：生細胞強調": {"default": 1.0, "desc": "1で死んでいない（壊死していない）細胞を赤い太枠で強調表示、0で無効", "file": "config_common.csv"},
 
         # 細胞解析設定 (config_cell.csv)
-        "細胞モデルパス": {"default": "models/custom_cpsam_v1", "desc": "細胞認識用Cellposeモデルのパス（空欄はデフォルトのcyto2を使用）", "file": "config_cell.csv"},
+        "細胞モデルパス": {"default": "models/custom_cpsam_v1", "desc": "細胞認識用Cellposeモデルのパス（空欄はデフォルトのcpsamを使用）", "file": "config_cell.csv"},
         "細胞径": {"default": 0.0, "desc": "細胞の直径。大きくすると小さなゴミを無視し、小さくすると小さな細胞まで拾います。", "file": "config_cell.csv"},
         "細胞フロー閾値": {"default": 0.4, "desc": "形の綺麗さ。上げると「綺麗な円形」だけを厳密に探し、下げると歪んだ形も拾います。", "file": "config_cell.csv"},
         "細胞確率閾値": {"default": 0.0, "desc": "検出感度。上げると「確実に細胞だ」と言える影だけを拾い、下げると背景に近い薄い影も細胞として扱います。", "file": "config_cell.csv"},
@@ -28,7 +28,7 @@ class ConfigLoader:
         "細胞マスク色": {"default": "", "desc": "細胞の描画色。空欄でランダム。指定例: 255,0,0 または #FF0000", "file": "config_cell.csv"},
 
         # 油脂解析設定 (config_lipid.csv)
-        "油脂モデルパス": {"default": "", "desc": "油脂認識用Cellposeモデルのパス（空欄はデフォルトのcyto2を使用）", "file": "config_lipid.csv"},
+        "油脂モデルパス": {"default": "", "desc": "油脂認識用Cellposeモデルのパス（空欄はデフォルトのcpsamを使用）", "file": "config_lipid.csv"},
         "油脂径": {"default": 0.0, "desc": "油脂の直径。大きくするとマスク範囲が広がり、小さくすると油脂の中心部のみを塗ります。", "file": "config_lipid.csv"},
         "油脂フロー閾値": {"default": 0.0, "desc": "形の制限。0にすると形を問わず光っている場所を全て塗り、上げると丸い粒だけを探します。", "file": "config_lipid.csv"},
         "油脂確率閾値": {"default": -4.0, "desc": "敏感さ。マイナスの値にするほど「ごく僅かな光」を油脂と見なし、プラスにするほど「強い光」のみを拾います。（目安：-2.0〜-4.0）", "file": "config_lipid.csv"},
@@ -41,7 +41,7 @@ class ConfigLoader:
         "油脂ノイズぼかし幅": {"default": 2.0, "desc": "ノイズカット閾値の前後で滑らかに黒に消退させるグラデーションの幅（0〜255）。0.0で無効。", "file": "config_lipid.csv"},
 
         # 壊死解析設定 (config_necrosis.csv)
-        "壊死モデルパス": {"default": "", "desc": "壊死細胞認識用Cellposeモデルのパス（空欄はデフォルトのcyto2を使用）", "file": "config_necrosis.csv"},
+        "壊死モデルパス": {"default": "", "desc": "壊死細胞認識用Cellposeモデルのパス（空欄はデフォルトのcpsamを使用）", "file": "config_necrosis.csv"},
         "壊死径": {"default": 0.0, "desc": "壊死細胞の直径。大きくするとマスク範囲が広がり、小さくすると中心部のみを塗ります。", "file": "config_necrosis.csv"},
         "壊死フロー閾値": {"default": 0.0, "desc": "形の制限。0にすると形を問わず光っている場所を全て塗り、上げると丸い粒だけを探します。", "file": "config_necrosis.csv"},
         "壊死確率閾値": {"default": -2.0, "desc": "敏感さ。マイナスの値にするほど「ごく僅かな光」を壊死と見なし、プラスにするほど「強い光」のみを拾います。", "file": "config_necrosis.csv"},

@@ -344,6 +344,17 @@ class App(ctk.CTk):
 
             self.prepare_analyzer()
 
+            # 解析開始直後に、必要なモデルが未ロードであればGUIログで進捗を表示しながらロードを実行する
+            if run_cell:
+                # analyzer._get_cell_model() 内で self.log_callback を通じて完了ログが表示される
+                self.analyzer._get_cell_model()
+
+            if run_lipid:
+                self.analyzer._get_lipid_model()
+
+            if run_necrosis:
+                self.analyzer._get_necrosis_model()
+
             bf_suffix = str(self.config_data.get("bf_suffix", "")).strip()
             fl_suffix = str(self.config_data.get("fl_suffix", "")).strip()
             pi_suffix = str(self.config_data.get("pi_suffix", "")).strip()
@@ -572,30 +583,30 @@ class App(ctk.CTk):
             occ = stats.get("lipid_cell_ratio", 0.0)
             prod = stats.get("total_production_ratio", 0.0)
             in_pct = stats.get("intracellular_lipid_percent", 0.0)
-            lipid_positive_cells = stats.get("lipid_positive_cell_count", 0)
+            lipid_positive_cell_count = stats.get("lipid_positive_cell_count", 0)
             lipid_positive_cell_ratio = stats.get("lipid_positive_cell_ratio", 0.0)
 
             log_lines.append(f"   >>> 油脂占有率       : {occ:.4f}")
             log_lines.append(f"   >>> 総生産率         : {prod:.4f}")
             log_lines.append(f"   >>> 細胞内油脂割合   : {in_pct * 100:.1f}%")
-            log_lines.append(f"   >>> 油脂保有細胞数   : {lipid_positive_cells} 個")
+            log_lines.append(f"   >>> 油脂保有細胞数   : {lipid_positive_cell_count} 個")
             log_lines.append(f"   >>> 油脂保有細胞割合 : {lipid_positive_cell_ratio * 100:.1f}%")
 
             row.update({
                 "油脂占有率": occ,
                 "総生産率": prod,
                 "細胞内油脂割合(%)": in_pct * 100,
-                "油脂保有細胞数": lipid_positive_cells,
+                "油脂保有細胞数": lipid_positive_cell_count,
                 "油脂保有細胞割合(%)": lipid_positive_cell_ratio * 100
             })
 
             totals["sum_occ"] += occ
             totals["sum_prod"] += prod
             totals["sum_in_pct"] += in_pct
-            totals["sum_lipid_positive_cells"] += lipid_positive_cells
+            totals["sum_lipid_positive_cells"] += lipid_positive_cell_count
             totals["sum_lipid_positive_cell_ratio"] += lipid_positive_cell_ratio
 
-            totals["lipid_positive_cells"].append(lipid_positive_cells)
+            totals["lipid_positive_cells"].append(lipid_positive_cell_count)
             if cells > 0:
                 totals["lipid_occupancies"].append(occ)
                 totals["total_production_ratios"].append(prod)
@@ -604,21 +615,21 @@ class App(ctk.CTk):
                 totals["intracellular_lipid_percents"].append(in_pct)
 
         if run_necrosis:
-            necrosis_positive_cells = stats.get("necrosis_positive_cell_count", 0)
+            necrosis_positive_cell_count = stats.get("necrosis_positive_cell_count", 0)
             necrosis_positive_cell_ratio = stats.get("necrosis_positive_cell_ratio", 0.0)
 
-            log_lines.append(f"   >>> 壊死細胞数       : {necrosis_positive_cells} 個")
+            log_lines.append(f"   >>> 壊死細胞数       : {necrosis_positive_cell_count} 個")
             log_lines.append(f"   >>> 壊死細胞割合     : {necrosis_positive_cell_ratio * 100:.1f}%")
 
             row.update({
-                "壊死細胞数": necrosis_positive_cells,
+                "壊死細胞数": necrosis_positive_cell_count,
                 "壊死細胞割合(%)": necrosis_positive_cell_ratio * 100
             })
 
-            totals["sum_necrosis_positive_cells"] += necrosis_positive_cells
+            totals["sum_necrosis_positive_cells"] += necrosis_positive_cell_count
             totals["sum_necrosis_positive_cell_ratio"] += necrosis_positive_cell_ratio
 
-            totals["necrosis_positive_cells"].append(necrosis_positive_cells)
+            totals["necrosis_positive_cells"].append(necrosis_positive_cell_count)
             if cells > 0:
                 totals["necrosis_positive_cell_ratios"].append(necrosis_positive_cell_ratio)
 
@@ -772,7 +783,7 @@ class App(ctk.CTk):
             sd_occ = float(np.std(totals["lipid_occupancies"], ddof=1)) if len(totals["lipid_occupancies"]) > 1 else 0.0
             avg_prod = float(np.mean(totals["total_production_ratios"])) if totals["total_production_ratios"] else 0.0
             avg_dist = float(np.mean(totals["intracellular_lipid_percents"])) * 100 if totals["intracellular_lipid_percents"] else 0.0
-            avg_lipid_positive_cells = float(np.mean(totals["lipid_positive_cells"])) if totals["lipid_positive_cells"] else 0.0
+            avg_lipid_positive_cell_count = float(np.mean(totals["lipid_positive_cells"])) if totals["lipid_positive_cells"] else 0.0
             avg_lipid_positive_cell_ratio = float(np.mean(totals["lipid_positive_cell_ratios"])) * 100 if totals["lipid_positive_cell_ratios"] else 0.0
             sd_lipid_positive_cell_ratio = (
                 float(np.std(totals["lipid_positive_cell_ratios"], ddof=1)) * 100
@@ -783,7 +794,7 @@ class App(ctk.CTk):
             summary_log_lines.append(f"   [標準偏差] 油脂占有率 : {sd_occ:.4f}")
             summary_log_lines.append(f"   [平均] 総生産率       : {avg_prod:.4f}")
             summary_log_lines.append(f"   [平均] 細胞内油脂割合 : {avg_dist:.1f}%")
-            summary_log_lines.append(f"   [平均] 油脂保有細胞数 : {avg_lipid_positive_cells:.1f} 個")
+            summary_log_lines.append(f"   [平均] 油脂保有細胞数 : {avg_lipid_positive_cell_count:.1f} 個")
             summary_log_lines.append(f"   [平均] 油脂保有細胞割合 : {avg_lipid_positive_cell_ratio:.1f}%")
             summary_log_lines.append(f"   [標準偏差] 油脂保有細胞割合 : {sd_lipid_positive_cell_ratio:.2f}")
 
@@ -792,25 +803,25 @@ class App(ctk.CTk):
                 "油脂占有率標準偏差": sd_occ,
                 "総生産率": avg_prod,
                 "細胞内油脂割合(%)": avg_dist,
-                "油脂保有細胞数": avg_lipid_positive_cells,
+                "油脂保有細胞数": avg_lipid_positive_cell_count,
                 "油脂保有細胞割合(%)": avg_lipid_positive_cell_ratio,
                 "油脂保有細胞割合標準偏差": sd_lipid_positive_cell_ratio
             })
 
         if run_necrosis:
-            avg_necrosis_positive_cells = float(np.mean(totals["necrosis_positive_cells"])) if totals["necrosis_positive_cells"] else 0.0
+            avg_necrosis_positive_cell_count = float(np.mean(totals["necrosis_positive_cells"])) if totals["necrosis_positive_cells"] else 0.0
             avg_necrosis_positive_cell_ratio = float(np.mean(totals["necrosis_positive_cell_ratios"])) * 100 if totals["necrosis_positive_cell_ratios"] else 0.0
             sd_necrosis_positive_cell_ratio = (
                 float(np.std(totals["necrosis_positive_cell_ratios"], ddof=1)) * 100
                 if len(totals["necrosis_positive_cell_ratios"]) > 1 else 0.0
             )
 
-            summary_log_lines.append(f"   [平均] 壊死細胞数 : {avg_necrosis_positive_cells:.1f} 個")
+            summary_log_lines.append(f"   [平均] 壊死細胞数 : {avg_necrosis_positive_cell_count:.1f} 個")
             summary_log_lines.append(f"   [平均] 壊死細胞割合 : {avg_necrosis_positive_cell_ratio:.1f}%")
             summary_log_lines.append(f"   [標準偏差] 壊死細胞割合 : {sd_necrosis_positive_cell_ratio:.2f}")
 
             summary_stat_row.update({
-                "壊死細胞数": avg_necrosis_positive_cells,
+                "壊死細胞数": avg_necrosis_positive_cell_count,
                 "壊死細胞割合(%)": avg_necrosis_positive_cell_ratio,
                 "壊死細胞割合標準偏差": sd_necrosis_positive_cell_ratio
             })
@@ -840,6 +851,17 @@ class App(ctk.CTk):
                 self.update_log("警告: 設定CSVの読み込みに失敗したため、前回またはデフォルト設定を使用します。")
 
             self.prepare_analyzer()
+
+            # 解析開始直後に、必要なモデルが未ロードであればGUIログで進捗を表示しながらロードを実行する
+            # analyzer._get_...model() 内の self._info() を通じてGUIに開始・完了ログが流れます
+            if run_cell:
+                self.analyzer._get_cell_model()
+
+            if run_lipid:
+                self.analyzer._get_lipid_model()
+
+            if run_necrosis:
+                self.analyzer._get_necrosis_model()
 
             bf_suffix = str(self.config_data.get("bf_suffix", "")).strip()
             fl_suffix = str(self.config_data.get("fl_suffix", "")).strip()
@@ -946,17 +968,16 @@ class App(ctk.CTk):
         signature = self.get_analyzer_signature()
 
         if self.analyzer is None or self.analyzer_signature != signature:
-            self.update_log_sync("解析モデルを初期化しています。")
+            self.update_log_sync("解析エンジンの準備を完了しました。（解析開始時に必要なモデルを自動ロードします）")
             try:
-                analyzer = YeastAnalyzer(self.config_data)
+                # ログ・コールバック（update_log）を渡してインスタンス化
+                analyzer = YeastAnalyzer(self.config_data, log_callback=self.update_log)
             except Exception as e:
-                raise RuntimeError(f"解析モデルの初期化に失敗しました: {e}") from e
+                raise RuntimeError(f"解析エンジンのセットアップに失敗しました: {e}") from e
 
             self.analyzer = analyzer
             self.analyzer_signature = signature
-            self.update_log("解析モデルの初期化が完了しました。")
         else:
-            self.update_log("既存の解析モデルを再利用します。")
             self.analyzer.cfg = self.config_data
 
     @staticmethod

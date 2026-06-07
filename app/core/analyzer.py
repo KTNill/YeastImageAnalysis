@@ -11,9 +11,10 @@ class YeastAnalyzer:
     透過光(BF)、蛍光(FL)、PI蛍光(PI)画像を解析し、細胞数および油脂・壊死細胞の分布を定量化する。
     """
 
-    def __init__(self, config):
+    def __init__(self, config, log_callback=None):
         self.logger = logging.getLogger(__name__)
         self.cfg = config
+        self.log_callback = log_callback  # GUIへのログ表示用コールバック
 
         use_gpu = bool(config.get("use_gpu"))
         self.device_available = False
@@ -31,12 +32,36 @@ class YeastAnalyzer:
         else:
             self.device = "cpu"
 
-        self.logger.info(f"解析デバイス: {self.device}")
+        self._info(f"解析デバイス: {self.device}")
 
-        # CellposeModelの初期化
-        self.cell_model = self._load_model(config.get("cell_model_path"), "cyto2", "細胞用")
-        self.lipid_model = self._load_model(config.get("lipid_model_path"), "cyto2", "油脂用")
-        self.necrosis_model = self._load_model(config.get("necrosis_model_path"), "cyto2", "壊死用")
+        # CellposeModelの初期化（遅延ロード用：最初はNone）
+        self.cell_model = None
+        self.lipid_model = None
+        self.necrosis_model = None
+
+    def _info(self, msg):
+        """コンソールとGUIの両方にログを出力する"""
+        self.logger.info(msg)
+        if self.log_callback:
+            self.log_callback(msg)
+
+    def _get_cell_model(self):
+        """細胞用モデルが必要になった段階でロードする"""
+        if self.cell_model is None:
+            self.cell_model = self._load_model(self.cfg.get("cell_model_path"), "cpsam", "細胞用")
+        return self.cell_model
+
+    def _get_lipid_model(self):
+        """油脂用モデルが必要になった段階でロードする"""
+        if self.lipid_model is None:
+            self.lipid_model = self._load_model(self.cfg.get("lipid_model_path"), "cpsam", "油脂用")
+        return self.lipid_model
+
+    def _get_necrosis_model(self):
+        """壊死用モデルが必要になった段階でロードする"""
+        if self.necrosis_model is None:
+            self.necrosis_model = self._load_model(self.cfg.get("necrosis_model_path"), "cpsam", "壊死用")
+        return self.necrosis_model
 
     def _load_model(self, model_path, fallback_model, model_name):
         try:
@@ -44,17 +69,20 @@ class YeastAnalyzer:
 
             if model_path:
                 if os.path.exists(model_path):
-                    self.logger.info(f"【{model_name}】カスタムモデルをロードします: {model_path}")
-                    return CellposeModel(gpu=self.device_available, pretrained_model=model_path)
+                    self._info(f"【{model_name}】カスタムモデルをロードします: {model_path}")
+                    model = CellposeModel(gpu=self.device_available, pretrained_model=model_path)
+                    self._info(f"【{model_name}】カスタムモデルのロードが完了しました。")
+                    return model
                 else:
                     self.logger.warning(
                         f"【{model_name}】指定されたカスタムモデルのパスが存在しません: {model_path}。 "
                         f"デフォルトモデル（{fallback_model}）にフォールバックします。"
                     )
-            else:
-                self.logger.info(f"【{model_name}】デフォルトモデル（{fallback_model}）をロードします。")
 
-            return CellposeModel(gpu=self.device_available, model_type=fallback_model)
+            self._info(f"【{model_name}】デフォルトモデル（{fallback_model}）をロードします。")
+            model = CellposeModel(gpu=self.device_available, model_type=fallback_model)
+            self._info(f"【{model_name}】デフォルトモデルのロードが完了しました。")
+            return model
         except Exception as e:
             self.logger.error(f"【{model_name}】モデルの初期化失敗: {e}")
             raise
@@ -165,7 +193,7 @@ class YeastAnalyzer:
         total_cell_px = 0
         if run_cell and bf_image is not None:
             if progress_callback: progress_callback(0.1)
-            cell_masks, _, _ = self.cell_model.eval(
+            cell_masks, _, _ = self._get_cell_model().eval(
                 bf_image, diameter=self.cfg.get("cell_diameter"), channels=[0, 0],
                 flow_threshold=self.cfg.get("cell_flow_threshold"),
                 cellprob_threshold=self.cfg.get("cell_cellprob_threshold"),
@@ -190,7 +218,7 @@ class YeastAnalyzer:
             # 加工画像をプレビューおよび保存用に追加
             visuals["lipid_clean"] = self._prepare_canvas(fl_clean)
 
-            lipid_masks, _, _ = self.lipid_model.eval(
+            lipid_masks, _, _ = self._get_lipid_model().eval(
                 fl_clean, diameter=self.cfg.get("lipid_diameter"), channels=[0, 0],
                 flow_threshold=self.cfg.get("lipid_flow_threshold"),
                 cellprob_threshold=self.cfg.get("lipid_cellprob_threshold"),
@@ -251,7 +279,7 @@ class YeastAnalyzer:
             # 加工画像をプレビューおよび保存用に追加
             visuals["necrosis_clean"] = self._prepare_canvas(pi_clean)
 
-            necrosis_masks, _, _ = self.necrosis_model.eval(
+            necrosis_masks, _, _ = self._get_necrosis_model().eval(
                 pi_clean, diameter=self.cfg.get("necrosis_diameter"), channels=[0, 0],
                 flow_threshold=self.cfg.get("necrosis_flow_threshold"),
                 cellprob_threshold=self.cfg.get("necrosis_cellprob_threshold"),
