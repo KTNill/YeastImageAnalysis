@@ -19,8 +19,8 @@ ctk.set_default_color_theme("blue")
 
 class App(ctk.CTk):
     """
-    メインGUIクラス。
-    進捗バーの精度、配色、ステータス表示、ログのリアルタイム性を最適化。
+    最終安定版GUI。
+    エラーの原因となるtag_configのfont指定を排除し、配色とリアルタイム描画を最適化。
     """
 
     IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".tif", ".tiff")
@@ -59,7 +59,7 @@ class App(ctk.CTk):
             self.sidebar_frame,
             text="< 待機中 >",
             font=ctk.CTkFont(family="MS Gothic", size=16, weight="bold"),
-            text_color="#AAAAAA"
+            text_color="#757575"
         )
         self.status_label.grid(row=1, column=0, padx=20, pady=(0, 15))
 
@@ -69,7 +69,6 @@ class App(ctk.CTk):
         self.memo_entry = ctk.CTkEntry(self.sidebar_frame, placeholder_text="実験メモ (フォルダ名用)")
         self.memo_entry.grid(row=3, column=0, padx=20, pady=(5, 10), sticky="ew")
 
-        # 解析オプション
         self.run_cell_var = ctk.BooleanVar(value=True)
         self.cell_check = ctk.CTkCheckBox(self.sidebar_frame, text="細胞解析 (BF)", variable=self.run_cell_var, command=self.on_cell_check_changed)
         self.cell_check.grid(row=4, column=0, padx=30, pady=8, sticky="w")
@@ -82,7 +81,6 @@ class App(ctk.CTk):
         self.necrosis_check = ctk.CTkCheckBox(self.sidebar_frame, text="壊死解析 (PI)", variable=self.run_necrosis_var, command=self.on_necrosis_check_changed)
         self.necrosis_check.grid(row=6, column=0, padx=30, pady=8, sticky="w")
 
-        # プレビュー表示設定フレーム
         self.preview_frame = ctk.CTkFrame(self.sidebar_frame)
         self.preview_frame.grid(row=7, column=0, padx=20, pady=10, sticky="ew")
         self.preview_label = ctk.CTkLabel(self.preview_frame, text="プレビュー表示対象:", font=ctk.CTkFont(size=13, weight="bold"))
@@ -114,15 +112,14 @@ class App(ctk.CTk):
         self.log_text.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
         self.log_text.tag_config("log_line_spacing", spacing3=5)
 
-        # --- 配色設計（高コントラスト版） ---
+        # 配色設計 (fontオプションを排除)
         self.log_text.tag_config(LogCategory.NORMAL.name, foreground="#E0E0E0")
-        self.log_text.tag_config(LogCategory.EVENT_START.name, foreground="#00E5FF")  # シアン
-        self.log_text.tag_config(LogCategory.EVENT_END.name, foreground="#00C853")  # エメラルド
-        self.log_text.tag_config(LogCategory.WARNING.name, foreground="#FF6D00")  # ビビッドオレンジ
-        self.log_text.tag_config(LogCategory.ERROR.name, foreground="#FF1744")  # ビビッド赤
+        self.log_text.tag_config(LogCategory.EVENT_START.name, foreground="#FFFFFF")  # 開始：白
+        self.log_text.tag_config(LogCategory.EVENT_END.name, foreground="#00E676")  # 完了：緑
+        self.log_text.tag_config(LogCategory.WARNING.name, foreground="#FF6D00")  # 警告：オレンジ
+        self.log_text.tag_config(LogCategory.ERROR.name, foreground="#FF1744")  # エラー：赤
 
-        # 強調パス（ライトゴールド #FFE082）
-        self.log_text.tag_config("highlight_path", foreground="#FFE082")
+        self.log_text.tag_config("highlight_path", foreground="#40C4FF")  # パス：水色
         self.log_text.tag_raise("highlight_path")
 
         self.progressbar = ctk.CTkProgressBar(self)
@@ -142,7 +139,7 @@ class App(ctk.CTk):
                     self._set_ui_state(msg["state"], msg.get("mode"))
 
                 self.msg_queue.task_done()
-                self.update_idletasks()  # 即座に画面更新を反映
+                self.update_idletasks()  # 再描画を強制
         except queue.Empty:
             pass
         finally:
@@ -152,7 +149,6 @@ class App(ctk.CTk):
         timestamp = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] "
         start_idx = self.log_text.index("end-1c")
 
-        # カテゴリに応じた接頭辞付与（WARNING, ERROR時）
         prefix = ""
         if category == LogCategory.WARNING:
             prefix = "⚠ "
@@ -161,7 +157,6 @@ class App(ctk.CTk):
 
         self.log_text.insert("end", f"{timestamp}{prefix}{message}\n")
         end_idx = self.log_text.index("end-1c")
-
         self.log_text.tag_add(category.name, start_idx, end_idx)
         self.log_text.tag_add("log_line_spacing", start_idx, end_idx)
 
@@ -186,19 +181,20 @@ class App(ctk.CTk):
         self.msg_queue.put({"type": "log", "text": msg, "category": category, "metadata": metadata})
 
     def _set_ui_state(self, is_running, mode=None):
+        """解析中/待機中のUI表示。ステータス色をログと完全に分離。"""
         self.is_running = is_running
         state = "disabled" if is_running else "normal"
         for w in self.input_widgets: w.configure(state=state)
 
         if is_running:
             if mode == "preview":
-                self.status_label.configure(text="< プレビュー中... >", text_color="#FFE082")
+                self.status_label.configure(text="< プレビュー中... >", text_color="#FFD740")  # アンバー
                 self.start_button.configure(state="disabled", fg_color="gray")
             else:
-                self.status_label.configure(text="< 解析中... >", text_color="#00E5FF")
+                self.status_label.configure(text="< 解析中... >", text_color="#FF4081")  # マゼンタピンク
                 self.start_button.configure(text="解析中止", fg_color="#cc0000", hover_color="#990000", state="normal")
         else:
-            self.status_label.configure(text="< 待機中 >", text_color="#AAAAAA")
+            self.status_label.configure(text="< 待機中 >", text_color="#757575")
             self.update_radio_state()
             self.start_button.configure(text="解析開始", state="normal", fg_color="green", hover_color="darkgreen")
             self.cancel_requested = False
@@ -209,15 +205,21 @@ class App(ctk.CTk):
             for r in [self.radio_clean, self.radio_mask, self.radio_combined]: r.configure(state=st)
 
     def on_cell_check_changed(self):
-        if not self.run_cell_var.get(): self.run_lipid_var.set(False); self.run_necrosis_var.set(False)
+        if not self.run_cell_var.get():
+            self.run_lipid_var.set(False)
+            self.run_necrosis_var.set(False)
         self.update_radio_state()
 
     def on_lipid_check_changed(self):
-        if self.run_lipid_var.get(): self.run_cell_var.set(True); self.run_necrosis_var.set(False)
+        if self.run_lipid_var.get():
+            self.run_cell_var.set(True)
+            self.run_necrosis_var.set(False)
         self.update_radio_state()
 
     def on_necrosis_check_changed(self):
-        if self.run_necrosis_var.get(): self.run_cell_var.set(True); self.run_lipid_var.set(False)
+        if self.run_necrosis_var.get():
+            self.run_cell_var.set(True)
+            self.run_lipid_var.set(False)
         self.update_radio_state()
 
     def select_folder(self):
@@ -260,7 +262,6 @@ class App(ctk.CTk):
             out_dir = self._create_out_dir(memo)
             self.queue_log(f"【解析開始: {len(bf_files)} セット】", LogCategory.EVENT_START)
 
-            # 定義確認
             if run_lipid or run_necrosis:
                 def_msg = "\n" + "=" * 70 + "\n定義確認:\n"
                 if run_lipid:
@@ -279,7 +280,8 @@ class App(ctk.CTk):
                 if self.cancel_requested:
                     self.queue_log("ユーザー操作により解析が中止されました。", LogCategory.WARNING)
                     break
-                # 進捗修正：処理開始時に (idx / total) を表示（2枚なら0%, 50%...）
+
+                # 進捗修正：処理開始時に (idx / total) を表示（2枚なら1枚目開始で0%）
                 self.msg_queue.put({"type": "progress", "value": idx / total_count})
                 row = self._proc_img(idx, total_count, name, bf_s, fl_s, pi_s, run_cell, run_lipid, run_necrosis, out_dir, totals)
                 if row: rows.append(row)
@@ -289,7 +291,7 @@ class App(ctk.CTk):
                 self.queue_log("✨ 全ての解析工程が完了しました", LogCategory.EVENT_END)
 
         except Exception as e:
-            self.queue_log(f"エラー: {e}", LogCategory.ERROR)
+            self.queue_log(f"解析致命的エラー: {e}", LogCategory.ERROR)
         finally:
             self.msg_queue.put({"type": "progress", "value": 1.0})
             self.msg_queue.put({"type": "ui_state", "state": False})
@@ -396,6 +398,7 @@ class App(ctk.CTk):
                 np.std(totals["necrosis_positive_cell_ratios"], ddof=1) * 100 if len(totals["necrosis_positive_cell_ratios"]) > 1 else 0.0)
             sum_log.extend([f"   [平均] 壊死細胞数 : {avg_n:.1f} 個", f"   [平均] 壊死細胞割合 : {avg_nr:.1f}%", f"   [標準偏差] 壊死細胞割合 : {sd_nr:.2f}"])
             stat_row.update({"壊死細胞数": avg_n, "壊死細胞割合(%)": avg_nr, "壊死細胞割合標準偏差": sd_nr})
+
         sum_log.append("-" * 40);
         self.queue_log("\n".join(sum_log), LogCategory.EVENT_END)
         self.queue_log(f"解析結果保存先: {out_dir}", LogCategory.NORMAL);
