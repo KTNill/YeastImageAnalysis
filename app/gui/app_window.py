@@ -10,6 +10,7 @@ import platform
 import subprocess
 import re
 import queue
+import shutil
 from app.core.analyzer import YeastAnalyzer, LogCategory
 
 # GUIの基本外観設定
@@ -314,6 +315,16 @@ class App(ctk.CTk):
                 return
 
             out_dir = self._create_out_dir(memo)
+
+            # 設定ファイルのコピーを結果フォルダに保存
+            try:
+                config_src_dir = self.config_data.config_dir
+                for f_name in os.listdir(config_src_dir):
+                    if f_name.endswith(".csv"):
+                        shutil.copy2(os.path.join(config_src_dir, f_name), os.path.join(out_dir, f_name))
+            except Exception as e:
+                self.queue_log(f"設定ファイルの保存に失敗しました: {e}", LogCategory.WARNING)
+
             self.queue_log(f"【解析開始: {len(bf_files)} セット】", LogCategory.EVENT_START)
 
             if run_lipid or run_necrosis:
@@ -468,7 +479,8 @@ class App(ctk.CTk):
         os.makedirs(p, exist_ok=True)
         return p
 
-    def _init_totals(self):
+    @staticmethod
+    def _init_totals():
         return {"cell_counts": [], "cell_area_means": [], "lipid_occupancies": [], "total_production_ratios": [], "intracellular_lipid_percents": [], "lipid_positive_cell_ratios": [], "lipid_positive_cells": [],
                 "necrosis_positive_cells": [], "necrosis_positive_cell_ratios": []}
 
@@ -476,7 +488,8 @@ class App(ctk.CTk):
         p = os.path.join(self.target_path, n)
         return cv2.imdecode(np.fromfile(p, dtype=np.uint8), cv2.IMREAD_UNCHANGED) if os.path.exists(p) else None
 
-    def _get_preview_key(self, run_l, run_n, p_type):
+    @staticmethod
+    def _get_preview_key(run_l, run_n, p_type):
         if run_n: return {"clean": "necrosis_clean", "mask": "necrosis"}.get(p_type, "combined_necrosis")
         if run_l: return {"clean": "lipid_clean", "mask": "lipid"}.get(p_type, "combined")
         return "cell"

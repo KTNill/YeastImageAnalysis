@@ -84,13 +84,15 @@ class YeastAnalyzer:
             self._log(f"【{model_name}】モデルの初期化失敗: {e}", LogCategory.ERROR)
             raise
 
-    def _apply_clip(self, image, clip_val):
+    @staticmethod
+    def _apply_clip(image, clip_val):
         val = float(clip_val)
         if val >= 255.0 or val <= 0: return image
         if image.dtype == np.uint16: val *= (65535.0 / 255.0)
         return np.minimum(image, val).astype(image.dtype)
 
-    def _apply_gamma(self, image, gamma):
+    @staticmethod
+    def _apply_gamma(image, gamma):
         g = float(gamma)
         if g == 1.0 or g <= 0: return image
         max_val = 65535.0 if image.dtype == np.uint16 else 255.0
@@ -98,7 +100,8 @@ class YeastAnalyzer:
         corrected = np.power(normalized, g)
         return np.clip(corrected * max_val, 0, max_val).astype(image.dtype)
 
-    def _apply_cutoff(self, image, threshold, fade_width):
+    @staticmethod
+    def _apply_cutoff(image, threshold, fade_width):
         th_val = float(threshold)
         w_val = float(fade_width)
         if th_val <= 0: return image
@@ -118,7 +121,8 @@ class YeastAnalyzer:
         k = t * t * (3.0 - 2.0 * t)
         return (img_float * k).astype(image.dtype)
 
-    def _filter_masks_by_intensity(self, masks, original_image, intensity_threshold):
+    @staticmethod
+    def _filter_masks_by_intensity(masks, original_image, intensity_threshold):
         th_val = float(intensity_threshold)
         if th_val <= 0: return masks
         if original_image.dtype == np.uint16: th_val *= (65535.0 / 255.0)
