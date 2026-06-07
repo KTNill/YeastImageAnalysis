@@ -122,14 +122,18 @@ class App(ctk.CTk):
         self.log_text.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
         self.log_text.tag_config("log_line_spacing", spacing3=5)
 
-        # 配色設計 (fontオプションを排除)
+        # 配色設計
         self.log_text.tag_config(LogCategory.NORMAL.name, foreground="#E0E0E0")
-        self.log_text.tag_config(LogCategory.EVENT_START.name, foreground="#FFFFFF")  # 開始：白
+        self.log_text.tag_config(LogCategory.EVENT_START.name, foreground="#FFFFFF")  # デフォルト開始：白
         self.log_text.tag_config(LogCategory.EVENT_END.name, foreground="#00E676")  # 完了：緑
         self.log_text.tag_config(LogCategory.WARNING.name, foreground="#FF6D00")  # 警告：オレンジ
         self.log_text.tag_config(LogCategory.ERROR.name, foreground="#FF1744")  # エラー：赤
 
-        self.log_text.tag_config("highlight_path", foreground="#40C4FF")  # パス：水色
+        # ステータスカラーと同期させる特別なログ色
+        self.log_text.tag_config("log_preview_start", foreground="#F39C12")  # プレビュー開始：アンバー
+        self.log_text.tag_config("log_analysis_start", foreground="#F39C12")  # 解析開始：アンバー
+
+        self.log_text.tag_config("highlight_path", foreground="#40C4FF")
         self.log_text.tag_raise("highlight_path")
 
         self.progressbar = ctk.CTkProgressBar(self)
@@ -167,7 +171,15 @@ class App(ctk.CTk):
 
         self.log_text.insert("end", f"{timestamp}{prefix}{message}\n")
         end_idx = self.log_text.index("end-1c")
-        self.log_text.tag_add(category.name, start_idx, end_idx)
+
+        # 特定のメッセージ内容に応じてタグを切り替える
+        applied_tag = category.name
+        if "【解析開始" in message:
+            applied_tag = "log_analysis_start"
+        elif "【プレビュー実行】" in message:
+            applied_tag = "log_preview_start"
+
+        self.log_text.tag_add(applied_tag, start_idx, end_idx)
         self.log_text.tag_add("log_line_spacing", start_idx, end_idx)
 
         h_targets = []
@@ -198,10 +210,10 @@ class App(ctk.CTk):
 
         if is_running:
             if mode == "preview":
-                self.status_label.configure(text="< プレビュー中... >", text_color="#FFD740")  # アンバー
+                self.status_label.configure(text="< プレビュー中... >", text_color="#F39C12")  # アンバー
                 self.start_button.configure(state="disabled", fg_color="gray")
             else:
-                self.status_label.configure(text="< 解析中... >", text_color="#FF4081")  # マゼンタピンク
+                self.status_label.configure(text="< 解析中... >", text_color="#F39C12")  # アンバー
                 self.start_button.configure(text="解析中止", fg_color="#cc0000", hover_color="#990000", state="normal")
         else:
             self.status_label.configure(text="< 待機中 >", text_color="#757575")
