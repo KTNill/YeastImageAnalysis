@@ -493,7 +493,8 @@ class App(ctk.CTk):
 
         return output_dir
 
-    def build_start_log(self, total_files, run_lipid, run_necrosis):
+    @staticmethod
+    def build_start_log(total_files, run_lipid, run_necrosis):
         start_log_lines = [
             f"【解析開始: {total_files} セット】"
         ]
@@ -536,7 +537,8 @@ class App(ctk.CTk):
                     highlight_text=bf_name
                 )
 
-    def build_result_row_and_log(self, bf_name, index, total_files, stats, run_cell, run_lipid, run_necrosis, totals):
+    @staticmethod
+    def build_result_row_and_log(bf_name, index, total_files, stats, run_cell, run_lipid, run_necrosis, totals):
         row = {"ファイル名": bf_name}
         log_lines = [f"[{index + 1}/{total_files}] {bf_name}"]
 
