@@ -17,12 +17,61 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 
+class SettingsWindow(ctk.CTkToplevel):
+    """詳細設定用のポップアップウィンドウ"""
+
+    def __init__(self, parent, title, config_file, config_loader):
+        super().__init__(parent)
+        self.title(f"詳細設定 - {title}")
+        self.geometry("650x750")
+        self.config_loader = config_loader
+        self.config_file = config_file
+        self.entries = {}
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        ctk.CTkLabel(self, text=f"【{title}】の詳細パラメーター", font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, pady=15)
+
+        self.scroll_frame = ctk.CTkScrollableFrame(self)
+        self.scroll_frame.grid(row=1, column=0, padx=20, pady=10, sticky="nsew")
+        self.scroll_frame.columnconfigure(1, weight=1)
+
+        row = 0
+        for jp_key, info in self.config_loader.CONFIG_SCHEMA.items():
+            if info["file"] == config_file:
+                internal_key = self.config_loader.KEY_MAP[jp_key]
+                current_val = self.config_loader.get(internal_key)
+
+                lbl = ctk.CTkLabel(self.scroll_frame, text=jp_key, font=ctk.CTkFont(weight="bold"))
+                lbl.grid(row=row, column=0, padx=10, pady=(15, 0), sticky="w")
+
+                desc = ctk.CTkLabel(self.scroll_frame, text=info["desc"], font=ctk.CTkFont(size=12), text_color="#A0A0A0", wraplength=550, justify="left")
+                desc.grid(row=row + 1, column=0, columnspan=2, padx=15, pady=(2, 5), sticky="w")
+
+                entry = ctk.CTkEntry(self.scroll_frame, width=250)
+                entry.insert(0, str(current_val) if current_val is not None else "")
+                entry.grid(row=row, column=1, padx=10, pady=(15, 0), sticky="e")
+
+                self.entries[internal_key] = entry
+                row += 2
+
+        self.save_btn = ctk.CTkButton(self, text="設定を保存して閉じる", fg_color="green", hover_color="darkgreen", height=40, command=self._save_and_close)
+        self.save_btn.grid(row=2, column=0, pady=25)
+        self.grab_set()
+
+    def _save_and_close(self):
+        updates = {k: e.get() for k, e in self.entries.items()}
+        if self.config_loader.save_config(updates):
+            self.destroy()
+        else:
+            messagebox.showerror("エラー", "設定の保存に失敗しました。")
+
+
 class App(ctk.CTk):
     """
-    最終安定版GUI。
-    ウィンドウを閉じた際、os._exit(0)によりプロセスを即座に強制終了するハードキル機構を実装。
+    最終安定版GUI。ハードキル機構、青色ハイライト、統計サマリー、設定機能。
     """
-
     IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".tif", ".tiff")
 
     def __init__(self):
@@ -34,68 +83,51 @@ class App(ctk.CTk):
         self.cancel_requested = False
         self.msg_queue = queue.Queue()
 
-        # ウィンドウの「×」ボタンが押された際、クリーンアップを無視して即座にOSレベルで終了する
         self.protocol("WM_DELETE_WINDOW", self._hard_kill)
-
         self.title("酵母・油脂 画像解析システム (Refactored)")
         self.geometry("1100x750")
 
-        # サイドバー幅を320pxに固定して見切れを防止
         self.grid_columnconfigure(0, weight=0, minsize=320)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
+    def _hard_kill(self):
+        os._exit(0)
+
+    def setup_ui(self):
         self._setup_sidebar()
         self._setup_main_area()
         self.after(100, self.process_msg_queue)
-
-    def _hard_kill(self):
-        """
-        OSレベルでの即時強制終了。
-        スレッドの終了待機やfinallyブロック、例外処理を一切介さずプロセスを破棄します。
-        """
-        os._exit(0)
 
     def _setup_sidebar(self):
         self.sidebar_frame = ctk.CTkFrame(self, width=320, corner_radius=0)
         self.sidebar_frame.grid(row=0, column=0, rowspan=3, sticky="nsew")
         self.sidebar_frame.grid_columnconfigure(0, weight=1)
 
-        self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="操作パネル", font=ctk.CTkFont(size=22, weight="bold"))
-        self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
+        header_container = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
+        header_container.grid(row=0, column=0, padx=20, pady=(20, 10), sticky="ew")
+        header_container.columnconfigure(0, weight=1)
+        self.logo_label = ctk.CTkLabel(header_container, text="操作パネル", font=ctk.CTkFont(size=22, weight="bold"))
+        self.logo_label.grid(row=0, column=0, sticky="w")
+        self.common_gear = ctk.CTkButton(header_container, text="⚙", width=35, height=35, fg_color="#444", hover_color="#666", command=lambda: self.open_settings("共通設定", "config_common.csv"))
+        self.common_gear.grid(row=0, column=1)
 
-        # ステータステキスト
-        self.status_label = ctk.CTkLabel(
-            self.sidebar_frame,
-            text="< 待機中 >",
-            font=ctk.CTkFont(family="MS Gothic", size=16, weight="bold"),
-            text_color="#757575"
-        )
+        self.status_label = ctk.CTkLabel(self.sidebar_frame, text="< 待機中 >", font=ctk.CTkFont(family="MS Gothic", size=16, weight="bold"), text_color="#757575")
         self.status_label.grid(row=1, column=0, padx=20, pady=(0, 15))
 
         self.select_button = ctk.CTkButton(self.sidebar_frame, text="画像フォルダを選択", command=self.select_folder)
         self.select_button.grid(row=2, column=0, padx=20, pady=10, sticky="ew")
-
         self.memo_entry = ctk.CTkEntry(self.sidebar_frame, placeholder_text="実験メモ (フォルダ名用)")
         self.memo_entry.grid(row=3, column=0, padx=20, pady=(5, 10), sticky="ew")
 
-        self.run_cell_var = ctk.BooleanVar(value=True)
-        self.cell_check = ctk.CTkCheckBox(self.sidebar_frame, text="細胞解析 (BF)", variable=self.run_cell_var, command=self.on_cell_check_changed)
-        self.cell_check.grid(row=4, column=0, padx=30, pady=8, sticky="w")
-
-        self.run_lipid_var = ctk.BooleanVar(value=True)
-        self.lipid_check = ctk.CTkCheckBox(self.sidebar_frame, text="油脂解析 (FL)", variable=self.run_lipid_var, command=self.on_lipid_check_changed)
-        self.lipid_check.grid(row=5, column=0, padx=30, pady=8, sticky="w")
-
-        self.run_necrosis_var = ctk.BooleanVar(value=False)
-        self.necrosis_check = ctk.CTkCheckBox(self.sidebar_frame, text="壊死解析 (PI)", variable=self.run_necrosis_var, command=self.on_necrosis_check_changed)
-        self.necrosis_check.grid(row=6, column=0, padx=30, pady=8, sticky="w")
+        self.input_widgets = [self.select_button, self.memo_entry, self.common_gear]
+        self._add_analysis_row(4, "細胞解析 (BF)", "run_cell_var", self.on_cell_check_changed, "細胞解析", "config_cell.csv", True)
+        self._add_analysis_row(5, "油脂解析 (FL)", "run_lipid_var", self.on_lipid_check_changed, "油脂解析", "config_lipid.csv", True)
+        self._add_analysis_row(6, "壊死解析 (PI)", "run_necrosis_var", self.on_necrosis_check_changed, "壊死解析", "config_necrosis.csv", False)
 
         self.preview_frame = ctk.CTkFrame(self.sidebar_frame)
         self.preview_frame.grid(row=7, column=0, padx=20, pady=10, sticky="ew")
-        self.preview_label = ctk.CTkLabel(self.preview_frame, text="プレビュー表示対象:", font=ctk.CTkFont(size=13, weight="bold"))
-        self.preview_label.pack(padx=10, pady=(5, 2), anchor="w")
-
+        ctk.CTkLabel(self.preview_frame, text="プレビュー表示対象:", font=ctk.CTkFont(size=13, weight="bold")).pack(padx=10, pady=(5, 2), anchor="w")
         self.preview_target_var = ctk.StringVar(value="combined")
         self.radio_clean = ctk.CTkRadioButton(self.preview_frame, text="前処理後画像", variable=self.preview_target_var, value="clean")
         self.radio_clean.pack(padx=15, pady=4, anchor="w")
@@ -106,16 +138,26 @@ class App(ctk.CTk):
 
         self.preview_button = ctk.CTkButton(self.sidebar_frame, text="1枚テストプレビュー", command=self.run_preview_thread)
         self.preview_button.grid(row=8, column=0, padx=20, pady=(15, 10), sticky="ew")
-
         self.start_button = ctk.CTkButton(self.sidebar_frame, text="解析開始", command=self.toggle_analysis, fg_color="green", hover_color="darkgreen")
         self.start_button.grid(row=9, column=0, padx=20, pady=(0, 20), sticky="ew")
 
-        self.input_widgets = [
-            self.select_button, self.memo_entry,
-            self.cell_check, self.lipid_check, self.necrosis_check,
-            self.preview_button, self.radio_clean, self.radio_mask, self.radio_combined
-        ]
+        self.input_widgets.extend([self.preview_button, self.radio_clean, self.radio_mask, self.radio_combined])
         self.update_radio_state()
+
+    def _add_analysis_row(self, row, text, var_name, command, title, config_file, default_val):
+        container = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
+        container.grid(row=row, column=0, padx=20, pady=4, sticky="ew")
+        container.columnconfigure(0, weight=1)
+        var = ctk.BooleanVar(value=default_val)
+        setattr(self, var_name, var)
+        check = ctk.CTkCheckBox(container, text=text, variable=var, command=command)
+        check.grid(row=0, column=0, sticky="w", padx=(5, 0))
+        gear = ctk.CTkButton(container, text="⚙", width=35, height=30, fg_color="#333", hover_color="#555", command=lambda: self.open_settings(title, config_file))
+        gear.grid(row=0, column=1)
+        self.input_widgets.extend([check, gear])
+
+    def open_settings(self, title, config_file):
+        SettingsWindow(self, title, config_file, self.config_data)
 
     def _setup_main_area(self):
         self.log_text = ctk.CTkTextbox(self, width=600, font=ctk.CTkFont(family="MS Gothic", size=13))
@@ -144,14 +186,12 @@ class App(ctk.CTk):
         try:
             while True:
                 msg = self.msg_queue.get_nowait()
-                msg_type = msg.get("type")
-                if msg_type == "log":
+                if msg["type"] == "log":
                     self._append_log_to_widget(msg["text"], msg["category"], msg.get("metadata"))
-                elif msg_type == "progress":
+                elif msg["type"] == "progress":
                     self.progressbar.set(msg["value"])
-                elif msg_type == "ui_state":
+                elif msg["type"] == "ui_state":
                     self._set_ui_state(msg["state"], msg.get("mode"))
-
                 self.msg_queue.task_done()
                 self.update_idletasks()
         except queue.Empty:
@@ -162,17 +202,10 @@ class App(ctk.CTk):
     def _append_log_to_widget(self, message, category, metadata=None):
         timestamp = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] "
         start_idx = self.log_text.index("end-1c")
-
-        prefix = ""
-        if category == LogCategory.WARNING:
-            prefix = "⚠ "
-        elif category == LogCategory.ERROR:
-            prefix = "❌ "
-
+        prefix = "⚠ " if category == LogCategory.WARNING else "❌ " if category == LogCategory.ERROR else ""
         self.log_text.insert("end", f"{timestamp}{prefix}{message}\n")
         end_idx = self.log_text.index("end-1c")
 
-        # 特定のメッセージ内容に応じてタグを切り替える
         applied_tag = category.name
         if "【解析開始" in message:
             applied_tag = "log_analysis_start"
@@ -186,8 +219,7 @@ class App(ctk.CTk):
         if metadata:
             if "path" in metadata: h_targets.append(metadata["path"])
             if "filename" in metadata: h_targets.append(metadata["filename"])
-        if "解析結果保存先:" in message:
-            h_targets.append(message.split("解析結果保存先:", 1)[1].strip())
+        if "解析結果保存先:" in message: h_targets.append(message.split("解析結果保存先:", 1)[1].strip())
 
         for t in h_targets:
             if not t: continue
@@ -203,17 +235,15 @@ class App(ctk.CTk):
         self.msg_queue.put({"type": "log", "text": msg, "category": category, "metadata": metadata})
 
     def _set_ui_state(self, is_running, mode=None):
-        """解析中/待機中のUI表示。ステータス色をログと完全に分離。"""
         self.is_running = is_running
         state = "disabled" if is_running else "normal"
         for w in self.input_widgets: w.configure(state=state)
-
         if is_running:
             if mode == "preview":
-                self.status_label.configure(text="< プレビュー中... >", text_color="#F39C12")  # アンバー
+                self.status_label.configure(text="< プレビュー中... >", text_color="#F39C12")
                 self.start_button.configure(state="disabled", fg_color="gray")
             else:
-                self.status_label.configure(text="< 解析中... >", text_color="#F39C12")  # アンバー
+                self.status_label.configure(text="< 解析中... >", text_color="#F39C12")
                 self.start_button.configure(text="解析中止", fg_color="#cc0000", hover_color="#990000", state="normal")
         else:
             self.status_label.configure(text="< 待機中 >", text_color="#757575")
@@ -227,21 +257,15 @@ class App(ctk.CTk):
             for r in [self.radio_clean, self.radio_mask, self.radio_combined]: r.configure(state=st)
 
     def on_cell_check_changed(self):
-        if not self.run_cell_var.get():
-            self.run_lipid_var.set(False)
-            self.run_necrosis_var.set(False)
+        if not self.run_cell_var.get(): self.run_lipid_var.set(False); self.run_necrosis_var.set(False)
         self.update_radio_state()
 
     def on_lipid_check_changed(self):
-        if self.run_lipid_var.get():
-            self.run_cell_var.set(True)
-            self.run_necrosis_var.set(False)
+        if self.run_lipid_var.get(): self.run_cell_var.set(True); self.run_necrosis_var.set(False)
         self.update_radio_state()
 
     def on_necrosis_check_changed(self):
-        if self.run_necrosis_var.get():
-            self.run_cell_var.set(True)
-            self.run_lipid_var.set(False)
+        if self.run_necrosis_var.get(): self.run_cell_var.set(True); self.run_lipid_var.set(False)
         self.update_radio_state()
 
     def select_folder(self):
@@ -255,6 +279,9 @@ class App(ctk.CTk):
             self.start_button.configure(text="中止処理中...", state="disabled", fg_color="gray")
             self.queue_log("解析の中止を要求しました。現在の処理が終わるまでお待ちください...", LogCategory.WARNING)
         elif not self.is_running:
+            if not any([self.run_cell_var.get(), self.run_lipid_var.get(), self.run_necrosis_var.get()]):
+                messagebox.showwarning("警告", "解析項目が選択されていません。")
+                return
             if not self.target_path: self.select_folder()
             if not self.target_path: return
             self.msg_queue.put({"type": "ui_state", "state": True, "mode": "analysis"})
@@ -263,6 +290,9 @@ class App(ctk.CTk):
 
     def run_preview_thread(self):
         if self.is_running: return
+        if not any([self.run_cell_var.get(), self.run_lipid_var.get(), self.run_necrosis_var.get()]):
+            messagebox.showwarning("警告", "解析項目が選択されていません。")
+            return
         if not self.target_path: self.select_folder()
         if not self.target_path: return
         self.msg_queue.put({"type": "ui_state", "state": True, "mode": "preview"})
@@ -280,7 +310,7 @@ class App(ctk.CTk):
             bf_files = sorted([f for f in os.listdir(self.target_path) if bf_s.lower() in f.lower() and f.lower().endswith(self.IMAGE_EXTS)])
 
             if not bf_files:
-                self.queue_log(f"エラー: 画像が見つかりません (識別子: {bf_s})", LogCategory.ERROR);
+                self.queue_log(f"エラー: 画像が見つかりません (識別子: {bf_s})", LogCategory.ERROR)
                 return
 
             out_dir = self._create_out_dir(memo)
@@ -427,7 +457,7 @@ class App(ctk.CTk):
 
         sum_log.append("-" * 40)
         self.queue_log("\n".join(sum_log), LogCategory.EVENT_END)
-        self.queue_log(f"解析結果保存先: {out_dir}", LogCategory.NORMAL)
+        self.queue_log(f"解析結果保存先: {out_dir}", LogCategory.NORMAL, metadata={"path": out_dir})
         rows.append(stat_row)
         pd.DataFrame(rows).to_csv(os.path.join(out_dir, "analysis_summary.csv"), index=False, encoding="utf-8-sig")
 

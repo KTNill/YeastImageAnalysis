@@ -41,8 +41,8 @@ def main():
 
     # GUIのインスタンスを作成
     app = App()
-    app.config_data = config
-    app.analyzer = None
+    app.config_data = config  # Configを先に渡す
+    app.setup_ui()  # その後にUIを組み立てる
 
     # メインループの実行
     app.mainloop()
