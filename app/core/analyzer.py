@@ -45,19 +45,19 @@ class YeastAnalyzer:
         if self.log_callback:
             self.log_callback(msg)
 
-    def _get_cell_model(self):
+    def get_cell_model(self):
         """細胞用モデルが必要になった段階でロードする"""
         if self.cell_model is None:
             self.cell_model = self._load_model(self.cfg.get("cell_model_path"), "cpsam", "細胞用")
         return self.cell_model
 
-    def _get_lipid_model(self):
+    def get_lipid_model(self):
         """油脂用モデルが必要になった段階でロードする"""
         if self.lipid_model is None:
             self.lipid_model = self._load_model(self.cfg.get("lipid_model_path"), "cpsam", "油脂用")
         return self.lipid_model
 
-    def _get_necrosis_model(self):
+    def get_necrosis_model(self):
         """壊死用モデルが必要になった段階でロードする"""
         if self.necrosis_model is None:
             self.necrosis_model = self._load_model(self.cfg.get("necrosis_model_path"), "cpsam", "壊死用")
@@ -193,7 +193,7 @@ class YeastAnalyzer:
         total_cell_px = 0
         if run_cell and bf_image is not None:
             if progress_callback: progress_callback(0.1)
-            cell_masks, _, _ = self._get_cell_model().eval(
+            cell_masks, _, _ = self.get_cell_model().eval(
                 bf_image, diameter=self.cfg.get("cell_diameter"), channels=[0, 0],
                 flow_threshold=self.cfg.get("cell_flow_threshold"),
                 cellprob_threshold=self.cfg.get("cell_cellprob_threshold"),
@@ -218,7 +218,7 @@ class YeastAnalyzer:
             # 加工画像をプレビューおよび保存用に追加
             visuals["lipid_clean"] = self._prepare_canvas(fl_clean)
 
-            lipid_masks, _, _ = self._get_lipid_model().eval(
+            lipid_masks, _, _ = self.get_lipid_model().eval(
                 fl_clean, diameter=self.cfg.get("lipid_diameter"), channels=[0, 0],
                 flow_threshold=self.cfg.get("lipid_flow_threshold"),
                 cellprob_threshold=self.cfg.get("lipid_cellprob_threshold"),
@@ -279,7 +279,7 @@ class YeastAnalyzer:
             # 加工画像をプレビューおよび保存用に追加
             visuals["necrosis_clean"] = self._prepare_canvas(pi_clean)
 
-            necrosis_masks, _, _ = self._get_necrosis_model().eval(
+            necrosis_masks, _, _ = self.get_necrosis_model().eval(
                 pi_clean, diameter=self.cfg.get("necrosis_diameter"), channels=[0, 0],
                 flow_threshold=self.cfg.get("necrosis_flow_threshold"),
                 cellprob_threshold=self.cfg.get("necrosis_cellprob_threshold"),

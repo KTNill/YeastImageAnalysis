@@ -338,22 +338,8 @@ class App(ctk.CTk):
     def run_preview(self, run_cell, run_lipid, run_necrosis, preview_type):
         """1枚テストプレビューを実行する処理"""
         try:
-            self.update_log(f"設定ファイルを読み込み中: {self.config_data.config_dir}")
-            if not self.config_data.load_config():
-                self.update_log("警告: 設定CSVの読み込みに失敗したため、前回またはデフォルト設定を使用します。")
-
             self.prepare_analyzer()
-
-            # 解析開始直後に、必要なモデルが未ロードであればGUIログで進捗を表示しながらロードを実行する
-            if run_cell:
-                # analyzer._get_cell_model() 内で self.log_callback を通じて完了ログが表示される
-                self.analyzer._get_cell_model()
-
-            if run_lipid:
-                self.analyzer._get_lipid_model()
-
-            if run_necrosis:
-                self.analyzer._get_necrosis_model()
+            self.get_models(run_cell, run_lipid, run_necrosis)
 
             bf_suffix = str(self.config_data.get("bf_suffix", "")).strip()
             fl_suffix = str(self.config_data.get("fl_suffix", "")).strip()
@@ -428,6 +414,18 @@ class App(ctk.CTk):
         finally:
             self.update_status(progress=1.0, enable_start_button=True)
 
+    def get_models(self, run_cell, run_lipid, run_necrosis):
+        # 解析開始直後に、必要なモデルが未ロードであればGUIログで進捗を表示しながらロードを実行する
+        # analyzer._get_...model() 内の self._info() を通じてGUIに開始・完了ログが流れる
+        if run_cell:
+            self.analyzer.get_cell_model()
+
+        if run_lipid:
+            self.analyzer.get_lipid_model()
+
+        if run_necrosis:
+            self.analyzer.get_necrosis_model()
+
     def open_file_in_os(self, filepath):
         """OSの標準アプリケーションでファイルを開く"""
         try:
@@ -439,22 +437,6 @@ class App(ctk.CTk):
                 subprocess.call(('xdg-open', filepath))
         except Exception as e:
             self.update_log(f"プレビュー画像の表示に失敗しました: {e}")
-
-    def prepare_analysis_context(self):
-        self.update_log(f"設定ファイルを読み込み中: {self.config_data.config_dir}")
-        if not self.config_data.load_config():
-            self.update_log("警告: 設定CSVの読み込みに失敗したため、前回またはデフォルト設定を使用します。")
-
-        self.prepare_analyzer()
-
-        run_cell = self.run_cell_var.get()
-        run_lipid = self.run_lipid_var.get()
-        run_necrosis = self.run_necrosis_var.get()
-        bf_suffix = str(self.config_data.get("bf_suffix", "")).strip()
-        fl_suffix = str(self.config_data.get("fl_suffix", "")).strip()
-        pi_suffix = str(self.config_data.get("pi_suffix", "")).strip()
-
-        return run_cell, run_lipid, run_necrosis, bf_suffix, fl_suffix, pi_suffix
 
     def collect_image_files(self, bf_suffix):
         image_extensions = (".png", ".jpg", ".jpeg", ".tif", ".tiff")
@@ -846,22 +828,8 @@ class App(ctk.CTk):
 
     def run_analysis(self, run_cell, run_lipid, run_necrosis, memo_text):
         try:
-            self.update_log(f"設定ファイルを読み込み中: {self.config_data.config_dir}")
-            if not self.config_data.load_config():
-                self.update_log("警告: 設定CSVの読み込みに失敗したため、前回またはデフォルト設定を使用します。")
-
             self.prepare_analyzer()
-
-            # 解析開始直後に、必要なモデルが未ロードであればGUIログで進捗を表示しながらロードを実行する
-            # analyzer._get_...model() 内の self._info() を通じてGUIに開始・完了ログが流れます
-            if run_cell:
-                self.analyzer._get_cell_model()
-
-            if run_lipid:
-                self.analyzer._get_lipid_model()
-
-            if run_necrosis:
-                self.analyzer._get_necrosis_model()
+            self.get_models(run_cell, run_lipid, run_necrosis)
 
             bf_suffix = str(self.config_data.get("bf_suffix", "")).strip()
             fl_suffix = str(self.config_data.get("fl_suffix", "")).strip()
@@ -963,6 +931,10 @@ class App(ctk.CTk):
         )
 
     def prepare_analyzer(self):
+        self.update_log(f"設定ファイルを読み込み中: {self.config_data.config_dir}")
+        if not self.config_data.load_config():
+            self.update_log("警告: 設定CSVの読み込みに失敗したため、前回またはデフォルト設定を使用します。")
+
         from app.core.analyzer import YeastAnalyzer
 
         signature = self.get_analyzer_signature()
