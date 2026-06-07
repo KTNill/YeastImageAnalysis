@@ -35,9 +35,9 @@ def main():
     logger = logging.getLogger(__name__)
     logger.info("アプリケーションを起動しました。")
 
-    # 設定ファイルの読み込み (絶対パスで解決)
-    config_path = os.path.join("config", "settings.csv")
-    config = ConfigLoader(config_path)
+    # 設定ディレクトリの指定 (フォルダ内の複数CSVを監視・読込)
+    config_dir = os.path.join("config")
+    config = ConfigLoader(config_dir)
 
     # GUIのインスタンスを作成
     app = App()

@@ -338,7 +338,7 @@ class App(ctk.CTk):
     def run_preview(self, run_cell, run_lipid, run_necrosis, preview_type):
         """1枚テストプレビューを実行する処理"""
         try:
-            self.update_log(f"設定ファイルを読み込み中: {self.config_data.config_path}")
+            self.update_log(f"設定ファイルを読み込み中: {self.config_data.config_dir}")
             if not self.config_data.load_config():
                 self.update_log("警告: 設定CSVの読み込みに失敗したため、前回またはデフォルト設定を使用します。")
 
@@ -430,7 +430,7 @@ class App(ctk.CTk):
             self.update_log(f"プレビュー画像の表示に失敗しました: {e}")
 
     def prepare_analysis_context(self):
-        self.update_log(f"設定ファイルを読み込み中: {self.config_data.config_path}")
+        self.update_log(f"設定ファイルを読み込み中: {self.config_data.config_dir}")
         if not self.config_data.load_config():
             self.update_log("警告: 設定CSVの読み込みに失敗したため、前回またはデフォルト設定を使用します。")
 
@@ -490,7 +490,14 @@ class App(ctk.CTk):
 
         output_dir = os.path.join(self.target_path, folder_name)
         os.makedirs(output_dir, exist_ok=True)
-        shutil.copy(self.config_data.config_path, os.path.join(output_dir, "used_settings.csv"))
+
+        # 設定ファイルを全てコピーする
+        config_files = ["config_common.csv", "config_cell.csv", "config_lipid.csv", "config_necrosis.csv"]
+        for f_name in config_files:
+            src = os.path.join(self.config_data.config_dir, f_name)
+            if os.path.exists(src):
+                shutil.copy(src, os.path.join(output_dir, f"used_{f_name}"))
+
         return output_dir
 
     def build_start_log(self, total_files, run_lipid, run_necrosis):
@@ -828,7 +835,7 @@ class App(ctk.CTk):
 
     def run_analysis(self, run_cell, run_lipid, run_necrosis, memo_text):
         try:
-            self.update_log(f"設定ファイルを読み込み中: {self.config_data.config_path}")
+            self.update_log(f"設定ファイルを読み込み中: {self.config_data.config_dir}")
             if not self.config_data.load_config():
                 self.update_log("警告: 設定CSVの読み込みに失敗したため、前回またはデフォルト設定を使用します。")
 
