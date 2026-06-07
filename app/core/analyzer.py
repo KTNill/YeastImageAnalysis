@@ -187,6 +187,9 @@ class YeastAnalyzer:
             fl_clean = self._apply_gamma(fl_clean, self.cfg.get("fl_gamma", 1.0))
             fl_clean = self._apply_cutoff(fl_clean, self.cfg.get("fl_noise_cutoff", 10.0), self.cfg.get("fl_noise_fade_width", 0.0))
 
+            # 加工画像をプレビューおよび保存用に追加
+            visuals["lipid_clean"] = self._prepare_canvas(fl_clean)
+
             lipid_masks, _, _ = self.lipid_model.eval(
                 fl_clean, diameter=self.cfg.get("lipid_diameter"), channels=[0, 0],
                 flow_threshold=self.cfg.get("lipid_flow_threshold"),
@@ -245,6 +248,9 @@ class YeastAnalyzer:
             pi_clean = self._apply_gamma(pi_clean, self.cfg.get("pi_gamma", 1.0))
             pi_clean = self._apply_cutoff(pi_clean, self.cfg.get("pi_noise_cutoff", 10.0), self.cfg.get("pi_noise_fade_width", 0.0))
 
+            # 加工画像をプレビューおよび保存用に追加
+            visuals["necrosis_clean"] = self._prepare_canvas(pi_clean)
+
             necrosis_masks, _, _ = self.necrosis_model.eval(
                 pi_clean, diameter=self.cfg.get("necrosis_diameter"), channels=[0, 0],
                 flow_threshold=self.cfg.get("necrosis_flow_threshold"),
@@ -295,7 +301,7 @@ class YeastAnalyzer:
                 # 合成したIDを元の細胞IDに戻す
                 c_ids = (unique_comb // offset).astype(int)
 
-                # 「それぞれのPIマスクと細胞 of 重複面積」 ÷ 「細胞自体の面積」
+                # 「それぞれのPIマスクと細胞の重複面積」 ÷ 「細胞自体の面積」
                 ratios = counts / cell_areas[c_ids]
 
                 # 指定した閾値以上の重複を持つ細胞IDだけを抽出
@@ -347,7 +353,7 @@ class YeastAnalyzer:
         cy = int(np.mean(y_coords))
         cx = int(np.mean(x_coords))
 
-        # 順番(ID)がシャッフルされても、同じ位置 of マスクは必ず同じ色になる
+        # 順番(ID)がシャッフルされても、同じ位置のマスクは必ず同じ色になる
         seed = (cy * 1009 + cx * 137 + salt) % (2 ** 31 - 1)
         rng = np.random.default_rng(seed)
         return rng.integers(100, 255, size=3).tolist()
@@ -359,7 +365,8 @@ class YeastAnalyzer:
         else:
             canvas = img.copy()
         if canvas.dtype != np.uint8:
-            canvas = cv2.normalize(canvas, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+            # 安全にuint8に正規化してキャストする
+            canvas = cv2.normalize(canvas, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
         return canvas
 
     def _draw_masks(self, img, masks, highlight_boundaries, color_str, salt=0):
