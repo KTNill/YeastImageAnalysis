@@ -6,10 +6,11 @@ import datetime
 import cv2
 import pandas as pd
 import numpy as np
-import shutil
 import platform
 import subprocess
 import re
+import queue
+from app.core.analyzer import YeastAnalyzer, LogCategory
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -17,28 +18,36 @@ ctk.set_default_color_theme("blue")
 
 class App(ctk.CTk):
     """
-    メインGUIクラス。チェックボックスの状態に応じて出力を動的に切り替える。
+    メインGUIクラス。
+    配色の最適化、進捗バーの精度向上、サイドバーのレイアウト崩れを修正。
     """
+
+    IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".tif", ".tiff")
 
     def __init__(self):
         super().__init__()
         self.analyzer = None
-        self.analyzer_signature = None
         self.config_data = None
         self.target_path = ""
         self.is_running = False
         self.cancel_requested = False
+        self.msg_queue = queue.Queue()
 
-        self.title("酵母・油脂 画像解析システム")
-        self.geometry("960x750")
+        self.title("酵母・油脂 画像解析システム (Refactored)")
+        # 横幅を広げ、サイドバーの視認性を確保
+        self.geometry("1080x750")
 
-        # Configure grid layout
-        self.grid_columnconfigure(0, weight=0, minsize=260)
+        # サイドバー幅を300pxに固定して見切れを防止
+        self.grid_columnconfigure(0, weight=0, minsize=300)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
-        # Sidebar frame
-        self.sidebar_frame = ctk.CTkFrame(self, width=240, corner_radius=0)
+        self._setup_sidebar()
+        self._setup_main_area()
+        self.after(100, self.process_msg_queue)
+
+    def _setup_sidebar(self):
+        self.sidebar_frame = ctk.CTkFrame(self, width=300, corner_radius=0)
         self.sidebar_frame.grid(row=0, column=0, rowspan=3, sticky="nsew")
         self.sidebar_frame.grid_columnconfigure(0, weight=1)
 
@@ -48,27 +57,22 @@ class App(ctk.CTk):
         self.select_button = ctk.CTkButton(self.sidebar_frame, text="画像フォルダを選択", command=self.select_folder)
         self.select_button.grid(row=1, column=0, padx=20, pady=10, sticky="ew")
 
-        # 実験メモ
         self.memo_entry = ctk.CTkEntry(self.sidebar_frame, placeholder_text="実験メモ (フォルダ名用)")
         self.memo_entry.grid(row=2, column=0, padx=20, pady=(10, 0), sticky="ew")
 
-        # チェックボックス連動ロジック
         self.run_cell_var = ctk.BooleanVar(value=True)
-        self.cell_check = ctk.CTkCheckBox(self.sidebar_frame, text="細胞解析 (BF)",
-                                          variable=self.run_cell_var, command=self.on_cell_check_changed)
+        self.cell_check = ctk.CTkCheckBox(self.sidebar_frame, text="細胞解析 (BF)", variable=self.run_cell_var, command=self.on_cell_check_changed)
         self.cell_check.grid(row=3, column=0, padx=20, pady=10, sticky="w")
 
         self.run_lipid_var = ctk.BooleanVar(value=True)
-        self.lipid_check = ctk.CTkCheckBox(self.sidebar_frame, text="油脂解析 (FL)",
-                                           variable=self.run_lipid_var, command=self.on_lipid_check_changed)
+        self.lipid_check = ctk.CTkCheckBox(self.sidebar_frame, text="油脂解析 (FL)", variable=self.run_lipid_var, command=self.on_lipid_check_changed)
         self.lipid_check.grid(row=4, column=0, padx=20, pady=10, sticky="w")
 
         self.run_necrosis_var = ctk.BooleanVar(value=False)
-        self.necrosis_check = ctk.CTkCheckBox(self.sidebar_frame, text="壊死解析 (PI)",
-                                              variable=self.run_necrosis_var, command=self.on_necrosis_check_changed)
+        self.necrosis_check = ctk.CTkCheckBox(self.sidebar_frame, text="壊死解析 (PI)", variable=self.run_necrosis_var, command=self.on_necrosis_check_changed)
         self.necrosis_check.grid(row=5, column=0, padx=20, pady=10, sticky="w")
 
-        # プレビュー設定フレーム
+        # プレビュー設定フレーム（ラベルを復元）
         self.preview_frame = ctk.CTkFrame(self.sidebar_frame)
         self.preview_frame.grid(row=6, column=0, padx=20, pady=10, sticky="ew")
 
@@ -76,886 +80,337 @@ class App(ctk.CTk):
         self.preview_label.pack(padx=10, pady=(5, 0), fill="x")
 
         self.preview_target_var = ctk.StringVar(value="combined")
-
         self.radio_clean = ctk.CTkRadioButton(self.preview_frame, text="前処理後画像", variable=self.preview_target_var, value="clean")
         self.radio_clean.pack(padx=10, pady=5, anchor="w")
-
         self.radio_mask = ctk.CTkRadioButton(self.preview_frame, text="マスク画像", variable=self.preview_target_var, value="mask")
         self.radio_mask.pack(padx=10, pady=5, anchor="w")
-
         self.radio_combined = ctk.CTkRadioButton(self.preview_frame, text="マージ画像", variable=self.preview_target_var, value="combined")
         self.radio_combined.pack(padx=10, pady=(5, 10), anchor="w")
 
-        # プレビューボタン
         self.preview_button = ctk.CTkButton(self.sidebar_frame, text="1枚テストプレビュー", command=self.run_preview_thread)
         self.preview_button.grid(row=7, column=0, padx=20, pady=(10, 10), sticky="ew")
 
-        # 解析開始・中止ボタン
-        self.start_button = ctk.CTkButton(self.sidebar_frame, text="解析開始", command=self.toggle_analysis,
-                                          fg_color="green", hover_color="darkgreen")
+        self.start_button = ctk.CTkButton(self.sidebar_frame, text="解析開始", command=self.toggle_analysis, fg_color="green", hover_color="darkgreen")
         self.start_button.grid(row=8, column=0, padx=20, pady=(0, 20), sticky="ew")
 
-        # ログエリア
-        self.log_text = ctk.CTkTextbox(
-            self,
-            width=600,
-            font=ctk.CTkFont(family="MS Gothic", size=12)
-        )
-        self.log_text.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
-        self.log_text.tag_config("log_line_spacing", spacing3=5)
-        self.log_text.tag_config("filename", foreground="#4DA3FF")
-        self.log_text.tag_config("summary_title", foreground="#FFD166")
-        self.log_text.tag_config("warning", foreground="#FF6B6B")  # 警告表示用の明るい赤色を追加
+        self.input_widgets = [
+            self.select_button, self.memo_entry,
+            self.cell_check, self.lipid_check, self.necrosis_check,
+            self.preview_button, self.radio_clean, self.radio_mask, self.radio_combined
+        ]
+        self.update_radio_state()
 
-        # 進捗バー
+    def _setup_main_area(self):
+        self.log_text = ctk.CTkTextbox(self, width=600, font=ctk.CTkFont(family="MS Gothic", size=13))
+        self.log_text.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
+
+        self.log_text.tag_config("log_line_spacing", spacing3=5)
+        # --- 行ベースの色設定 ---
+        self.log_text.tag_config(LogCategory.NORMAL.name, foreground="#E0E0E0")  # 通常：白系
+        self.log_text.tag_config(LogCategory.EVENT_START.name, foreground="#FFD600")  # 開始：鮮やかなゴールド
+        self.log_text.tag_config(LogCategory.EVENT_END.name, foreground="#00E676")  # 完了：エメラルドグリーン
+        self.log_text.tag_config(LogCategory.WARNING.name, foreground="#FF8A65")  # 警告：サーモンオレンジ
+        self.log_text.tag_config(LogCategory.ERROR.name, foreground="#FF5252")  # エラー：赤
+
+        # --- 部分強調の色設定 ---
+        self.log_text.tag_config("highlight_path", foreground="#40C4FF")  # パス：清潔な水色
+        self.log_text.tag_raise("highlight_path")
+
         self.progressbar = ctk.CTkProgressBar(self)
         self.progressbar.grid(row=2, column=1, padx=20, pady=(0, 20), sticky="ew")
         self.progressbar.set(0)
 
-        # 初期状態の反映
-        self.update_radio_state()
+    def process_msg_queue(self):
+        try:
+            while True:
+                msg = self.msg_queue.get_nowait()
+                msg_type = msg.get("type")
+                if msg_type == "log":
+                    self._append_log_to_widget(msg["text"], msg["category"], msg.get("metadata"))
+                elif msg_type == "progress":
+                    self.progressbar.set(msg["value"])
+                elif msg_type == "ui_state":
+                    self._set_ui_state(msg["state"], msg.get("mode"))
+                elif msg_type == "dialog":
+                    if msg["icon"] == "error": messagebox.showerror(msg["title"], msg["message"])
+                self.msg_queue.task_done()
+        except queue.Empty:
+            pass
+        finally:
+            self.after(100, self.process_msg_queue)
+
+    def _append_log_to_widget(self, message, category, metadata=None):
+        timestamp = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] "
+        start_idx = self.log_text.index("end-1c")
+
+        # 警告やエラーにはリファクタリング前の絵文字を付与
+        prefix = ""
+        if category == LogCategory.WARNING:
+            prefix = "⚠ "
+        elif category == LogCategory.ERROR:
+            prefix = "❌ "
+
+        self.log_text.insert("end", f"{timestamp}{prefix}{message}\n")
+        end_idx = self.log_text.index("end-1c")
+
+        self.log_text.tag_add(category.name, start_idx, end_idx)
+        self.log_text.tag_add("log_line_spacing", start_idx, end_idx)
+
+        # 強調すべきパスやファイル名の特定
+        h_targets = []
+        if metadata:
+            if "path" in metadata: h_targets.append(metadata["path"])
+            if "filename" in metadata: h_targets.append(metadata["filename"])
+        if "解析結果保存先:" in message:
+            h_targets.append(message.split("解析結果保存先:", 1)[1].strip())
+
+        for t in h_targets:
+            if not t: continue
+            cur = start_idx
+            while True:
+                found = self.log_text.search(t, cur, stopindex=end_idx)
+                if not found: break
+                self.log_text.tag_add("highlight_path", found, f"{found}+{len(t)}c")
+                cur = f"{found}+1c"
+        self.log_text.see("end")
+
+    def queue_log(self, msg, category=LogCategory.NORMAL, metadata=None):
+        self.msg_queue.put({"type": "log", "text": msg, "category": category, "metadata": metadata})
+
+    def _set_ui_state(self, is_running, mode=None):
+        self.is_running = is_running
+        state = "disabled" if is_running else "normal"
+        for w in self.input_widgets: w.configure(state=state)
+
+        if is_running:
+            if mode == "preview":
+                self.start_button.configure(state="disabled", fg_color="gray")
+            else:
+                self.start_button.configure(text="解析中止", fg_color="#cc0000", hover_color="#990000", state="normal")
+        else:
+            self.update_radio_state()
+            self.start_button.configure(text="解析開始", state="normal", fg_color="green", hover_color="darkgreen")
+            self.cancel_requested = False
 
     def update_radio_state(self):
-        """油脂または壊死解析がONのときのみラジオボタンを有効化する"""
-        if not self.run_lipid_var.get() and not self.run_necrosis_var.get():
-            self.radio_clean.configure(state="disabled")
-            self.radio_mask.configure(state="disabled")
-            self.radio_combined.configure(state="disabled")
-        else:
-            self.radio_clean.configure(state="normal")
-            self.radio_mask.configure(state="normal")
-            self.radio_combined.configure(state="normal")
+        if not self.is_running:
+            st = "normal" if self.run_lipid_var.get() or self.run_necrosis_var.get() else "disabled"
+            self.radio_clean.configure(state=st)
+            self.radio_mask.configure(state=st)
+            self.radio_combined.configure(state=st)
 
     def on_cell_check_changed(self):
-        if not self.run_cell_var.get():
-            self.run_lipid_var.set(False)
-            self.run_necrosis_var.set(False)
+        if not self.run_cell_var.get(): self.run_lipid_var.set(False); self.run_necrosis_var.set(False)
         self.update_radio_state()
 
     def on_lipid_check_changed(self):
-        if self.run_lipid_var.get():
-            self.run_cell_var.set(True)
-            self.run_necrosis_var.set(False)
+        if self.run_lipid_var.get(): self.run_cell_var.set(True); self.run_necrosis_var.set(False)
         self.update_radio_state()
 
     def on_necrosis_check_changed(self):
-        if self.run_necrosis_var.get():
-            self.run_cell_var.set(True)
-            self.run_lipid_var.set(False)
+        if self.run_necrosis_var.get(): self.run_cell_var.set(True); self.run_lipid_var.set(False)
         self.update_radio_state()
 
     def select_folder(self):
-        path = filedialog.askdirectory()
-        if path:
-            self.target_path = path
-            self.update_log(f"解析フォルダ設定完了: {path}")
-
-    def _set_ui_state_running_main(self, is_preview=False):
-        self.preview_button.configure(state="disabled")
-        # 実行中はラジオボタンを操作不可にする
-        self.radio_clean.configure(state="disabled")
-        self.radio_mask.configure(state="disabled")
-        self.radio_combined.configure(state="disabled")
-
-        if is_preview:
-            self.start_button.configure(state="disabled", fg_color="gray")
-        else:
-            self.start_button.configure(text="解析中止", fg_color="#cc0000", hover_color="#990000", state="normal")
-
-    def _set_ui_state_stopped_main(self):
-        self.preview_button.configure(state="normal")
-        # 停止時にチェック状態に合わせてラジオボタンの有効/無効を復元する
-        self.update_radio_state()
-
-        self.start_button.configure(text="解析開始", state="normal", fg_color="green", hover_color="darkgreen")
-        self.cancel_requested = False
-        self.is_running = False
-
-    def update_log(self, message, highlight_text=None):
-        self.after(0, self._append_log, message, highlight_text)
-
-    def update_log_sync(self, message, highlight_text=None):
-        if threading.current_thread() is threading.main_thread():
-            self._append_log(message, highlight_text)
-            return
-
-        completed = threading.Event()
-
-        def append_and_notify():
-            try:
-                self._append_log(message, highlight_text)
-            finally:
-                completed.set()
-
-        try:
-            self.after(0, append_and_notify)
-            completed.wait(timeout=2.0)
-        except Exception:
-            completed.set()
-
-    def _append_log(self, message, highlight_text=None):
-        timestamp = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] "
-        start_index = self.log_text.index("end-1c")
-
-        self.log_text.insert("end", f"{timestamp}{message}\n")
-
-        if highlight_text:
-            highlight_texts = highlight_text if isinstance(highlight_text, list) else [highlight_text]
-
-            for text in highlight_texts:
-                search_start = start_index
-                while True:
-                    found_index = self.log_text.search(text, search_start, stopindex="end")
-                    if not found_index:
-                        break
-
-                    found_end = f"{found_index}+{len(text)}c"
-                    self.log_text.tag_add("filename", found_index, found_end)
-                    search_start = found_end
-
-        # 警告マーク（⚠）のある箇所を行末まで警告色（赤色）に設定する
-        search_start = start_index
-        while True:
-            found_index = self.log_text.search("⚠", search_start, stopindex="end")
-            if not found_index:
-                break
-            found_end = f"{found_index} lineend"
-            self.log_text.tag_add("warning", found_index, found_end)
-            search_start = f"{found_index}+1c"
-
-        highlighted_titles = [
-            "【 全画像 統計サマリー 】",
-            "【解析開始:"
-        ]
-
-        for title in highlighted_titles:
-            search_start = start_index
-            while True:
-                found_index = self.log_text.search(title, search_start, stopindex="end")
-                if not found_index:
-                    break
-
-                if title == "【解析開始:":
-                    line_end = self.log_text.search("】", found_index, stopindex="end")
-                    if not line_end:
-                        break
-                    found_end = f"{line_end}+1c"
-                else:
-                    found_end = f"{found_index}+{len(title)}c"
-
-                self.log_text.tag_add("summary_title", found_index, found_end)
-                search_start = found_end
-
-        self.log_text.tag_add("log_line_spacing", start_index, "end")
-        self.log_text.see("end")
-        # --- 描画の遅延を防ぐため、強制的にUIを再描画（アップデート）する ---
-        self.update_idletasks()
-
-    def update_status(self, message=None, progress=None, highlight_text=None, enable_start_button=None):
-        self.after(0, self._update_status, message, progress, highlight_text, enable_start_button)
-
-    def _update_status(self, message=None, progress=None, highlight_text=None, enable_start_button=None):
-        if message is not None:
-            self._append_log(message, highlight_text)
-
-        if progress is not None:
-            self.progressbar.set(progress)
-
-        if enable_start_button is not None:
-            if enable_start_button:
-                self._set_ui_state_stopped_main()
-            else:
-                self.is_running = True
-
-        # ステータス更新時も強制的にUIを再描画する
-        self.update_idletasks()
-
-    def show_error(self, title, message):
-        self.after(0, messagebox.showerror, title, message)
+        p = filedialog.askdirectory()
+        if p: self.target_path = p; self.queue_log(f"解析フォルダ設定完了: {p}", metadata={"path": p})
 
     def toggle_analysis(self):
-        """解析開始・中止ボタンの制御"""
         if self.is_running and not self.cancel_requested:
             self.cancel_requested = True
             self.start_button.configure(text="中止処理中...", state="disabled", fg_color="gray")
-            self.update_log("⚠ 解析の中止を要求しました。現在の処理が終わるまでお待ちください...")
+            self.queue_log("⚠ 解析の中止を要求しました。現在の処理が終わるまでお待ちください...", LogCategory.WARNING)
         elif not self.is_running:
-            self.start_analysis_thread()
-
-    def start_analysis_thread(self):
-        if self.is_running:
-            return
-
-        if not self.target_path or not os.path.exists(self.target_path):
-            self.select_folder()
-            if not self.target_path:
-                return
-
-        # エラーを防ぐため、GUIウィジェットからの値取得はメインスレッドで事前に行う
-        run_cell = self.run_cell_var.get()
-        run_lipid = self.run_lipid_var.get()
-        run_necrosis = self.run_necrosis_var.get()
-        memo_text = self.memo_entry.get().strip()
-
-        self.is_running = True
-        self.cancel_requested = False
-        self.after(0, lambda: self._set_ui_state_running_main(is_preview=False))
-
-        # 重い処理（モデルロード等）はバックグラウンドスレッドで実行
-        threading.Thread(
-            target=self.run_analysis,
-            args=(run_cell, run_lipid, run_necrosis, memo_text),
-            daemon=True
-        ).start()
+            if not self.target_path: self.select_folder()
+            if not self.target_path: return
+            self.msg_queue.put({"type": "ui_state", "state": True, "mode": "analysis"})
+            threading.Thread(target=self.run_analysis_logic, args=(self.run_cell_var.get(), self.run_lipid_var.get(), self.run_necrosis_var.get(), self.memo_entry.get().strip()), daemon=True).start()
 
     def run_preview_thread(self):
-        """プレビュー処理の開始スレッド"""
-        if self.is_running:
-            return
+        if self.is_running: return
+        if not self.target_path: self.select_folder()
+        if not self.target_path: return
+        self.msg_queue.put({"type": "ui_state", "state": True, "mode": "preview"})
+        threading.Thread(target=self.run_preview_logic, args=(self.run_cell_var.get(), self.run_lipid_var.get(), self.run_necrosis_var.get(), self.preview_target_var.get()), daemon=True).start()
 
-        if not self.target_path or not os.path.exists(self.target_path):
-            self.select_folder()
-            if not self.target_path:
-                return
-
-        # エラーを防ぐため、GUIウィジェットからの値取得はメインスレッドで事前に行う
-        run_cell = self.run_cell_var.get()
-        run_lipid = self.run_lipid_var.get()
-        run_necrosis = self.run_necrosis_var.get()
-        preview_type = self.preview_target_var.get()
-
-        self.is_running = True
-        self.cancel_requested = False
-        self.after(0, lambda: self._set_ui_state_running_main(is_preview=True))
-
-        # 重い処理（モデルロード等）はバックグラウンドスレッドで実行
-        threading.Thread(
-            target=self.run_preview,
-            args=(run_cell, run_lipid, run_necrosis, preview_type),
-            daemon=True
-        ).start()
-
-    def run_preview(self, run_cell, run_lipid, run_necrosis, preview_type):
-        """1枚テストプレビューを実行する処理"""
+    def run_analysis_logic(self, run_cell, run_lipid, run_necrosis, memo):
         try:
             self.prepare_analyzer()
-            self.get_models(run_cell, run_lipid, run_necrosis)
+            if run_cell: self.analyzer.get_cell_model()
+            if run_lipid: self.analyzer.get_lipid_model()
+            if run_necrosis: self.analyzer.get_necrosis_model()
 
-            bf_suffix = str(self.config_data.get("bf_suffix", "")).strip()
-            fl_suffix = str(self.config_data.get("fl_suffix", "")).strip()
-            pi_suffix = str(self.config_data.get("pi_suffix", "")).strip()
-
-            files, bf_files, bf_suffix_lower = self.collect_image_files(bf_suffix)
+            bf_suffix, fl_suffix, pi_suffix = [str(self.config_data.get(k, "")).strip() for k in ["bf_suffix", "fl_suffix", "pi_suffix"]]
+            bf_files = sorted([f for f in os.listdir(self.target_path) if bf_suffix.lower() in f.lower() and f.lower().endswith(self.IMAGE_EXTS)])
 
             if not bf_files:
-                self.handle_no_bf_images(files, bf_suffix)
+                self.queue_log(f"エラー: 画像が見つかりません (BF識別子: {bf_suffix})", LogCategory.ERROR);
                 return
 
-            bf_name = bf_files[0]
-            self.update_log(f"【プレビュー実行】先頭の1枚を解析中: {bf_name}")
+            out_dir = self._create_out_dir(memo)
+            self.queue_log(f"【解析開始: {len(bf_files)} セット】", LogCategory.EVENT_START)
 
-            preview_dir = os.path.join(self.target_path, "preview_temp")
-            os.makedirs(preview_dir, exist_ok=True)
-
-            prefix_map = {
-                "cell": "01_",
-                "lipid_clean": "00_clean_",
-                "lipid": "02_",
-                "combined": "03_",
-                "necrosis_clean": "00_clean_",
-                "necrosis": "02_",
-                "combined_necrosis": "03_"
-            }
-
-            # ダミーのtotalsディクショナリ
-            dummy_totals = {
-                "sum_occ": 0.0, "sum_prod": 0.0, "sum_cells": 0, "sum_in_pct": 0.0,
-                "sum_lipid_positive_cells": 0, "sum_lipid_positive_cell_ratio": 0.0,
-                "sum_necrosis_positive_cells": 0, "sum_necrosis_positive_cell_ratio": 0.0,
-                "cell_counts": [], "cell_area_means": [], "lipid_occupancies": [],
-                "total_production_ratios": [], "intracellular_lipid_percents": [],
-                "lipid_positive_cells": [], "lipid_positive_cell_ratios": [],
-                "necrosis_positive_cells": [], "necrosis_positive_cell_ratios": []
-            }
-
-            row = self.analyze_single_image(
-                0, 1, bf_name, bf_suffix, bf_suffix_lower, fl_suffix, pi_suffix,
-                run_cell, run_lipid, run_necrosis, preview_dir, prefix_map, dummy_totals
-            )
-
-            if row is not None:
-                self.update_log("プレビュー画像の生成が完了しました。画像を開きます。")
-
-                target_key = "cell"
+            if run_lipid or run_necrosis:
+                def_msg = "\n" + "=" * 70 + "\n定義確認:\n"
+                if run_lipid:
+                    def_msg += " 1. 油脂占有率 (蓄積度)   = 細胞内の油脂面積 / 細胞の総面積\n" \
+                               " 2. 油脂生産率 (効率)     = 全油脂面積 / 細胞の総面積\n" \
+                               " 3. 細胞内油脂割合 (分布) = (細胞内の油脂面積 / 全油脂面積) × 100\n" \
+                               " 4. 油脂保有細胞割合     = 油脂を含む細胞数 / 全体の細胞数\n"
                 if run_necrosis:
-                    if preview_type == "clean":
-                        target_key = "necrosis_clean"
-                    elif preview_type == "mask":
-                        target_key = "necrosis"
-                    else:
-                        target_key = "combined_necrosis"
-                elif run_lipid:
-                    if preview_type == "clean":
-                        target_key = "lipid_clean"
-                    elif preview_type == "mask":
-                        target_key = "lipid"
-                    else:
-                        target_key = "combined"
+                    def_msg += " 1. 壊死細胞割合 = 壊死細胞数 / 全体の細胞数\n"
+                def_msg += "=" * 70
+                self.queue_log(def_msg, LogCategory.EVENT_START)
 
-                filepath = os.path.join(preview_dir, f"{prefix_map.get(target_key, '')}{target_key}_{bf_name}")
-                if os.path.exists(filepath):
-                    self.open_file_in_os(filepath)
-                else:
-                    self.update_log(f"指定されたプレビュー画像が見つかりません: {filepath}")
+            rows, totals = [], self._init_totals()
+            total_count = len(bf_files)
+            for idx, bf_name in enumerate(bf_files):
+                if self.cancel_requested: self.queue_log("⚠ ユーザー操作により解析が中止されました。", LogCategory.WARNING); break
+                # 進捗の更新（処理開始前に現在の位置を表示）
+                self.msg_queue.put({"type": "progress", "value": idx / total_count})
+                row = self._proc_img(idx, total_count, bf_name, bf_suffix, fl_suffix, pi_suffix, run_cell, run_lipid, run_necrosis, out_dir, totals)
+                if row: rows.append(row)
+
+            if rows:
+                self._write_summary(rows, totals, len(rows), run_cell, run_lipid, run_necrosis, out_dir)
+                self.queue_log("✨ 全ての解析工程が完了しました", LogCategory.EVENT_END)
 
         except Exception as e:
-            self.update_status(f"エラー: {e}", enable_start_button=True)
-            self.show_error("エラー", str(e))
+            self.queue_log(f"エラー: {e}", LogCategory.ERROR)
         finally:
-            self.update_status(progress=1.0, enable_start_button=True)
+            self.msg_queue.put({"type": "progress", "value": 1.0})
+            self.msg_queue.put({"type": "ui_state", "state": False})
 
-    def get_models(self, run_cell, run_lipid, run_necrosis):
-        # 解析開始直後に、必要なモデルが未ロードであればGUIログで進捗を表示しながらロードを実行する
-        # analyzer._get_...model() 内の self._info() を通じてGUIに開始・完了ログが流れる
-        if run_cell:
-            self.analyzer.get_cell_model()
-
-        if run_lipid:
-            self.analyzer.get_lipid_model()
-
-        if run_necrosis:
-            self.analyzer.get_necrosis_model()
-
-    def open_file_in_os(self, filepath):
-        """OSの標準アプリケーションでファイルを開く"""
+    def run_preview_logic(self, run_cell, run_lipid, run_necrosis, p_type):
         try:
-            if platform.system() == 'Windows':
-                os.startfile(filepath)
-            elif platform.system() == 'Darwin':
-                subprocess.call(('open', filepath))
-            else:
-                subprocess.call(('xdg-open', filepath))
+            self.prepare_analyzer()
+            bf_suffix, fl_suffix, pi_suffix = [str(self.config_data.get(k, "")).strip() for k in ["bf_suffix", "fl_suffix", "pi_suffix"]]
+            bf_files = sorted([f for f in os.listdir(self.target_path) if bf_suffix.lower() in f.lower() and f.lower().endswith(self.IMAGE_EXTS)])
+            if not bf_files: return
+
+            self.msg_queue.put({"type": "progress", "value": 0.3})
+            out = os.path.join(self.target_path, "preview_temp");
+            os.makedirs(out, exist_ok=True)
+            self.queue_log(f"【プレビュー実行】先頭の1枚を解析中: {bf_files[0]}", LogCategory.EVENT_START, metadata={"filename": bf_files[0]})
+
+            row = self._proc_img(0, 1, bf_files[0], bf_suffix, fl_suffix, pi_suffix, run_cell, run_lipid, run_necrosis, out, self._init_totals())
+
+            if row:
+                self.queue_log("✨ プレビュー画像の生成が完了しました。", LogCategory.EVENT_END)
+                target = self._get_preview_key(run_lipid, run_necrosis, p_type)
+                pref = {"cell": "01_", "lipid_clean": "00_clean_", "lipid": "02_", "combined": "03_", "necrosis_clean": "00_clean_", "necrosis": "02_", "combined_necrosis": "03_"}
+                path = os.path.join(out, f"{pref.get(target, '')}{target}_{bf_files[0]}")
+                if os.path.exists(path):
+                    if platform.system() == 'Windows':
+                        os.startfile(path)
+                    else:
+                        subprocess.call(('open' if platform.system() == 'Darwin' else 'xdg-open', path))
         except Exception as e:
-            self.update_log(f"プレビュー画像の表示に失敗しました: {e}")
+            self.queue_log(f"エラー: {e}", LogCategory.ERROR)
+        finally:
+            self.msg_queue.put({"type": "progress", "value": 1.0})
+            self.msg_queue.put({"type": "ui_state", "state": False})
 
-    def collect_image_files(self, bf_suffix):
-        image_extensions = (".png", ".jpg", ".jpeg", ".tif", ".tiff")
-        files = [
-            file_name for file_name in os.listdir(self.target_path)
-            if file_name.lower().endswith(image_extensions)
-        ]
+    def _proc_img(self, idx, total, bf_name, bf_s, fl_s, pi_s, run_c, run_l, run_n, out_dir, totals):
+        stem, ext = os.path.splitext(bf_name);
+        img_bf = self._read_img(bf_name)
+        img_fl, img_pi = None, None
+        if run_l:
+            fl_n = f"{stem[:-len(bf_s)]}{fl_s}{ext}";
+            img_fl = self._read_img(fl_n)
+            if img_fl is None:
+                self.queue_log(f"警告: 油脂用画像が見つかりません。スキップします: {fl_n}", LogCategory.WARNING, metadata={"filename": fl_n});
+                return None
+        if run_n:
+            pi_n = f"{stem[:-len(bf_s)]}{pi_s}{ext}";
+            img_pi = self._read_img(pi_n)
+            if img_pi is None:
+                self.queue_log(f"警告: 壊死用画像が見つかりません。スキップします: {pi_n}", LogCategory.WARNING, metadata={"filename": pi_n});
+                return None
+        if img_bf is None: return None
 
-        bf_suffix_lower = bf_suffix.lower()
-        bf_files = sorted([file_name for file_name in files if bf_suffix_lower in file_name.lower()])
+        stats, visuals = self.analyzer.analyze(img_bf, img_fl, img_pi, run_c, run_l, run_n)
+        prefixes = {"cell": "01_", "lipid_clean": "00_clean_", "lipid": "02_", "combined": "03_", "necrosis_clean": "00_clean_", "necrosis": "02_", "combined_necrosis": "03_"}
+        for k, v in visuals.items():
+            p = os.path.join(out_dir, f"{prefixes.get(k, '')}{k}_{bf_name}")
+            cv2.imencode(os.path.splitext(p)[1], v)[1].tofile(p)
+        return self._build_row_and_log(bf_name, idx, total, stats, run_c, run_l, run_n, totals)
 
-        return files, bf_files, bf_suffix_lower
-
-    def handle_no_bf_images(self, files, bf_suffix):
-        sample_file_names = files[:10]
-        if sample_file_names:
-            sample_files = "\n".join(f"      - {file_name}" for file_name in sample_file_names)
-            highlight_files = sample_file_names
-        else:
-            sample_files = "      画像ファイル自体が見つかりません。"
-            highlight_files = None
-
-        self.update_status(
-            "エラー: 画像が見つかりません。\n"
-            f"   対象フォルダ: {self.target_path}\n"
-            f"   BF識別子: {bf_suffix}\n"
-            f"   検出した画像数: {len(files)}\n"
-            f"   画像ファイル例:\n{sample_files}",
-            1.0,
-            highlight_text=highlight_files,
-            enable_start_button=True
-        )
-
-    def create_output_directory(self, memo):
-        """出力フォルダの作成。メモが入力されていればフォルダ名に付与する"""
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        if memo:
-            # フォルダ名に使えない文字をアンダースコアに置換
-            memo_clean = re.sub(r'[\\/:*?"<>|]+', '_', memo)
-            folder_name = f"result_{memo_clean}_{timestamp}"
-        else:
-            folder_name = f"result_{timestamp}"
-
-        output_dir = os.path.join(self.target_path, folder_name)
-        os.makedirs(output_dir, exist_ok=True)
-
-        # 設定ファイルを全てコピーする
-        config_files = ["config_common.csv", "config_cell.csv", "config_lipid.csv", "config_necrosis.csv"]
-        for f_name in config_files:
-            src = os.path.join(self.config_data.config_dir, f_name)
-            if os.path.exists(src):
-                shutil.copy(src, os.path.join(output_dir, f"used_{f_name}"))
-
-        return output_dir
-
-    @staticmethod
-    def build_start_log(total_files, run_lipid, run_necrosis):
-        start_log_lines = [
-            f"【解析開始: {total_files} セット】"
-        ]
-
-        if run_lipid:
-            start_log_lines.extend([
-                "=" * 70,
-                "定義確認:",
-                " 1. 油脂占有率 (蓄積度)   = 細胞内の油脂面積 / 細胞の総面積",
-                " 2. 油脂生産率 (効率)     = 全油脂面積 / 細胞の総面積",
-                " 3. 細胞内油脂割合 (分布) = (細胞内の油脂面積 / 全油脂面積) × 100",
-                " 4. 油脂保有細胞割合     = 油脂を含む細胞数 / 全体の細胞数",
-                "=" * 70
-            ])
-        elif run_necrosis:
-            start_log_lines.extend([
-                "=" * 70,
-                "定義確認:",
-                " 1. 壊死細胞割合 = 壊死細胞数 / 全体の細胞数",
-                "=" * 70
-            ])
-
-        return "\n".join(start_log_lines)
-
-    def read_image(self, file_name):
-        image_path = os.path.join(self.target_path, file_name)
-        return cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
-
-    def save_visuals(self, visuals, output_dir, bf_name, prefix_map):
-        for key, image in visuals.items():
-            output_path = os.path.join(output_dir, f"{prefix_map.get(key, '')}{key}_{bf_name}")
-            ext = os.path.splitext(output_path)[1]
-            success, encoded = cv2.imencode(ext, image)
-
-            if success:
-                encoded.tofile(output_path)
-            else:
-                self.update_log(
-                    f"警告: 結果画像の保存に失敗しました: {output_path}",
-                    highlight_text=bf_name
-                )
-
-    @staticmethod
-    def build_result_row_and_log(bf_name, index, total_files, stats, run_cell, run_lipid, run_necrosis, totals):
-        row = {"ファイル名": bf_name}
-        log_lines = [f"[{index + 1}/{total_files}] {bf_name}"]
-
-        cells = stats.get("cell_count", 0) if run_cell else 0
-
-        if run_cell:
-            area = stats.get("total_cell_px", 0)
-
-            log_lines.append(f"   >>> 細胞数   : {cells} 個")
-            log_lines.append(f"   >>> 細胞面積 : {area} px")
-
-            row.update({
-                "細胞数": cells,
-                "細胞面積(px)": area
-            })
-
-            totals["sum_cells"] += cells
+    def _build_row_and_log(self, bf_name, index, total, stats, run_c, run_l, run_n, totals):
+        row, log = {"ファイル名": bf_name}, [f"[{index + 1}/{total}] {bf_name}"]
+        cells = stats.get("cell_count", 0) if run_c else 0
+        if run_c:
+            a = stats.get("total_cell_px", 0);
+            log.append(f"   >>> 細胞数   : {cells} 個\n   >>> 細胞面積 : {a} px")
+            row.update({"細胞数": cells, "細胞面積(px)": a});
             totals["cell_counts"].append(cells)
-
             if cells > 0:
-                totals["cell_area_means"].append(area / cells)
+                totals["cell_area_means"].append(a / cells)
             else:
-                log_lines.append("   ⚠ 細胞数が0のため、本画像の平均・比率データは全体統計の計算から除外されます。")
-
-        if run_lipid:
-            occ = stats.get("lipid_cell_ratio", 0.0)
-            prod = stats.get("total_production_ratio", 0.0)
-            in_pct = stats.get("intracellular_lipid_percent", 0.0)
-            lipid_positive_cell_count = stats.get("lipid_positive_cell_count", 0)
-            lipid_positive_cell_ratio = stats.get("lipid_positive_cell_ratio", 0.0)
-
-            log_lines.append(f"   >>> 油脂占有率       : {occ:.4f}")
-            log_lines.append(f"   >>> 総生産率         : {prod:.4f}")
-            log_lines.append(f"   >>> 細胞内油脂割合   : {in_pct * 100:.1f}%")
-            log_lines.append(f"   >>> 油脂保有細胞数   : {lipid_positive_cell_count} 個")
-            log_lines.append(f"   >>> 油脂保有細胞割合 : {lipid_positive_cell_ratio * 100:.1f}%")
-
-            row.update({
-                "油脂占有率": occ,
-                "総生産率": prod,
-                "細胞内油脂割合(%)": in_pct * 100,
-                "油脂保有細胞数": lipid_positive_cell_count,
-                "油脂保有細胞割合(%)": lipid_positive_cell_ratio * 100
-            })
-
-            totals["sum_occ"] += occ
-            totals["sum_prod"] += prod
-            totals["sum_in_pct"] += in_pct
-            totals["sum_lipid_positive_cells"] += lipid_positive_cell_count
-            totals["sum_lipid_positive_cell_ratio"] += lipid_positive_cell_ratio
-
-            totals["lipid_positive_cells"].append(lipid_positive_cell_count)
-            if cells > 0:
-                totals["lipid_occupancies"].append(occ)
-                totals["total_production_ratios"].append(prod)
-                totals["lipid_positive_cell_ratios"].append(lipid_positive_cell_ratio)
-            if stats.get("total_lipid_px", 0) > 0:
-                totals["intracellular_lipid_percents"].append(in_pct)
-
-        if run_necrosis:
-            necrosis_positive_cell_count = stats.get("necrosis_positive_cell_count", 0)
-            necrosis_positive_cell_ratio = stats.get("necrosis_positive_cell_ratio", 0.0)
-
-            log_lines.append(f"   >>> 壊死細胞数       : {necrosis_positive_cell_count} 個")
-            log_lines.append(f"   >>> 壊死細胞割合     : {necrosis_positive_cell_ratio * 100:.1f}%")
-
-            row.update({
-                "壊死細胞数": necrosis_positive_cell_count,
-                "壊死細胞割合(%)": necrosis_positive_cell_ratio * 100
-            })
-
-            totals["sum_necrosis_positive_cells"] += necrosis_positive_cell_count
-            totals["sum_necrosis_positive_cell_ratio"] += necrosis_positive_cell_ratio
-
-            totals["necrosis_positive_cells"].append(necrosis_positive_cell_count)
-            if cells > 0:
-                totals["necrosis_positive_cell_ratios"].append(necrosis_positive_cell_ratio)
-
-        return row, "\n".join(log_lines)
-
-    def analyze_single_image(
-            self,
-            index,
-            total_files,
-            bf_name,
-            bf_suffix,
-            bf_suffix_lower,
-            fl_suffix,
-            pi_suffix,
-            run_cell,
-            run_lipid,
-            run_necrosis,
-            output_dir,
-            prefix_map,
-            totals
-    ):
-        progress_value = (index + 1) / total_files
-
-        stem, ext = os.path.splitext(bf_name)
-        if not stem.lower().endswith(bf_suffix_lower):
-            self.update_status(
-                f"スキップ: BF識別子が末尾にありません: {bf_name}",
-                progress_value,
-                highlight_text=bf_name
-            )
-            return None
-
-        img_bf = self.read_image(bf_name)
-        img_fl = None
-        img_pi = None
-        fl_name = None
-        pi_name = None
-
-        if run_lipid:
-            fl_name = f"{stem[:-len(bf_suffix)]}{fl_suffix}{ext}"
-            fl_path = os.path.join(self.target_path, fl_name)
-            if os.path.exists(fl_path):
-                img_fl = self.read_image(fl_name)
-
-        if run_necrosis:
-            pi_name = f"{stem[:-len(bf_suffix)]}{pi_suffix}{ext}"
-            pi_path = os.path.join(self.target_path, pi_name)
-            if os.path.exists(pi_path):
-                img_pi = self.read_image(pi_name)
-
-        if img_bf is None:
-            self.update_status(
-                f"警告: BF画像の読み込みに失敗しました。スキップします: {bf_name}",
-                progress_value,
-                highlight_text=bf_name
-            )
-            return None
-
-        if run_lipid and img_fl is None:
-            self.update_status(
-                f"警告: 対応する蛍光画像が見つかりません。スキップします: {fl_name}",
-                progress_value,
-                highlight_text=fl_name if fl_name else ""
-            )
-            return None
-
-        if run_necrosis and img_pi is None:
-            self.update_status(
-                f"警告: 対応するPI蛍光画像が見つかりません。スキップします: {pi_name}",
-                progress_value,
-                highlight_text=pi_name if pi_name else ""
-            )
-            return None
-
-        try:
-            stats, visuals = self.analyzer.analyze(
-                bf_image=img_bf,
-                fl_image=img_fl,
-                pi_image=img_pi,
-                run_cell=run_cell,
-                run_lipid=run_lipid,
-                run_necrosis=run_necrosis,
-                progress_callback=None
-            )
-        except Exception as e:
-            self.update_status(
-                f"警告: 解析に失敗しました。スキップします: {bf_name}\n   理由: {e}",
-                progress_value,
-                highlight_text=bf_name
-            )
-            return None
-
-        row, log_message = self.build_result_row_and_log(
-            bf_name,
-            index,
-            total_files,
-            stats,
-            run_cell,
-            run_lipid,
-            run_necrosis,
-            totals
-        )
-
-        self.update_status(
-            log_message,
-            progress_value,
-            highlight_text=bf_name
-        )
-
-        self.save_visuals(visuals, output_dir, bf_name, prefix_map)
-
+                log.append("⚠ 細胞数が0のため、本画像の平均データは除外されます。")
+        if run_l:
+            occ, prd, inp, lpcc, lpcr = [stats.get(k, 0.0) for k in ["lipid_cell_ratio", "total_production_ratio", "intracellular_lipid_percent", "lipid_positive_cell_count", "lipid_positive_cell_ratio"]]
+            log.append(f"   >>> 油脂占有率       : {occ:.4f}\n   >>> 総生産率         : {prd:.4f}\n   >>> 細胞内油脂割合   : {inp * 100:.1f}%\n   >>> 油脂保有細胞数   : {lpcc} 個\n   >>> 油脂保有細胞割合 : {lpcr * 100:.1f}%")
+            row.update({"油脂占有率": occ, "総生産率": prd, "細胞内油脂割合(%)": inp * 100, "油脂保有細胞数": lpcc, "油脂保有細胞割合(%)": lpcr * 100})
+            totals["lipid_positive_cells"].append(lpcc)
+            if cells > 0: totals["lipid_occupancies"].append(occ); totals["total_production_ratios"].append(prd); totals["lipid_positive_cell_ratios"].append(lpcr)
+            if stats.get("total_lipid_px", 0) > 0: totals["intracellular_lipid_percents"].append(inp)
+        if run_n:
+            npcc, npcr = stats.get("necrosis_positive_cell_count", 0), stats.get("necrosis_positive_cell_ratio", 0.0)
+            log.append(f"   >>> 壊死細胞数       : {npcc} 個\n   >>> 壊死細胞割合     : {npcr * 100:.1f}%")
+            row.update({"壊死細胞数": npcc, "壊死細胞割合(%)": npcr * 100});
+            totals["necrosis_positive_cells"].append(npcc)
+            if cells > 0: totals["necrosis_positive_cell_ratios"].append(npcr)
+        self.queue_log("\n".join(log), LogCategory.NORMAL, metadata={"filename": bf_name});
         return row
 
-    def write_summary(self, summary_rows, totals, processed_count, run_cell, run_lipid, run_necrosis, output_dir):
-        if processed_count <= 0:
-            self.update_status(
-                "処理対象の画像がありませんでした。",
-                1.0,
-                enable_start_button=True
-            )
-            return
+    def _write_summary(self, rows, totals, count, run_c, run_l, run_n, out_dir):
+        sum_log, stat_row = ["", "-" * 40, "【 全画像 統計サマリー 】"], {"ファイル名": "--- 全体統計平均 ---"}
+        if run_c and totals["cell_counts"]:
+            avg_c, sd_c = np.mean(totals["cell_counts"]), (np.std(totals["cell_counts"], ddof=1) if len(totals["cell_counts"]) > 1 else 0.0)
+            avg_a, sd_a = np.mean(totals["cell_area_means"]), (np.std(totals["cell_area_means"], ddof=1) if len(totals["cell_area_means"]) > 1 else 0.0)
+            sum_log.extend([f"   [平均]     細胞数 : {avg_c:.1f} 個", f"   [標準偏差] 細胞数 : {sd_c:.2f}", f"   [平均]     細胞平均面積 : {avg_a:.2f} px", f"   [標準偏差] 細胞平均面積 : {sd_a:.2f}"])
+            stat_row.update({"細胞数": avg_c, "細胞数標準偏差": sd_c, "細胞平均面積(px)": avg_a, "細胞平均面積標準偏差": sd_a})
+        if run_l and totals["lipid_occupancies"]:
+            avg_o, sd_o = np.mean(totals["lipid_occupancies"]), (np.std(totals["lipid_occupancies"], ddof=1) if len(totals["lipid_occupancies"]) > 1 else 0.0)
+            avg_p, avg_i, avg_lpcc = np.mean(totals["total_production_ratios"]), np.mean(totals["intracellular_lipid_percents"]) * 100, np.mean(totals["lipid_positive_cells"])
+            avg_lpcr, sd_lpcr = np.mean(totals["lipid_positive_cell_ratios"]) * 100, (np.std(totals["lipid_positive_cell_ratios"], ddof=1) * 100 if len(totals["lipid_positive_cell_ratios"]) > 1 else 0.0)
+            sum_log.extend(
+                [f"   [平均]     油脂占有率 : {avg_o:.4f}", f"   [標準偏差] 油脂占有率 : {sd_o:.4f}", f"   [平均] 総生産率       : {avg_p:.4f}", f"   [平均] 細胞内油脂割合 : {avg_i:.1f}%", f"   [平均] 油脂保有細胞数 : {avg_lpcc:.1f} 個",
+                 f"   [平均] 油脂保有細胞割合 : {avg_lpcr:.1f}%", f"   [標準偏差] 油脂保有細胞割合 : {sd_lpcr:.2f}"])
+            stat_row.update({"油脂占有率": avg_o, "油脂占有率標準偏差": sd_o, "総生産率": avg_p, "細胞内油脂割合(%)": avg_i, "油脂保有細胞数": avg_lpcc, "油脂保有細胞割合(%)": avg_lpcr, "油脂保有細胞割合標準偏差": sd_lpcr})
+        if run_n and totals["necrosis_positive_cells"]:
+            avg_n, avg_nr, sd_nr = np.mean(totals["necrosis_positive_cells"]), np.mean(totals["necrosis_positive_cell_ratios"]) * 100, (
+                np.std(totals["necrosis_positive_cell_ratios"], ddof=1) * 100 if len(totals["necrosis_positive_cell_ratios"]) > 1 else 0.0)
+            sum_log.extend([f"   [平均] 壊死細胞数 : {avg_n:.1f} 個", f"   [平均] 壊死細胞割合 : {avg_nr:.1f}%", f"   [標準偏差] 壊死細胞割合 : {sd_nr:.2f}"])
+            stat_row.update({"壊死細胞数": avg_n, "壊死細胞割合(%)": avg_nr, "壊死細胞割合標準偏差": sd_nr})
 
-        summary_log_lines = [
-            "",
-            "-" * 40,
-            "【 全画像 統計サマリー 】"
-        ]
+        sum_log.append("-" * 40);
+        self.queue_log("\n".join(sum_log), LogCategory.EVENT_END)
+        self.queue_log(f"解析結果保存先: {out_dir}", LogCategory.NORMAL);
+        rows.append(stat_row)
+        pd.DataFrame(rows).to_csv(os.path.join(out_dir, "analysis_summary.csv"), index=False, encoding="utf-8-sig")
 
-        summary_stat_row = {"ファイル名": "--- 全体統計平均 ---"}
+    def _create_out_dir(self, memo):
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        f = f"result_{re.sub(r'[\\/:*?\"<>|]+', '_', memo)}_{ts}" if memo else f"result_{ts}"
+        p = os.path.join(self.target_path, f);
+        os.makedirs(p, exist_ok=True);
+        return p
 
-        if run_cell:
-            avg_cells = float(np.mean(totals["cell_counts"])) if totals["cell_counts"] else 0.0
-            sd_cells = float(np.std(totals["cell_counts"], ddof=1)) if len(totals["cell_counts"]) > 1 else 0.0
-            avg_cell_area = float(np.mean(totals["cell_area_means"])) if totals["cell_area_means"] else 0.0
-            sd_cell_area = float(np.std(totals["cell_area_means"], ddof=1)) if len(totals["cell_area_means"]) > 1 else 0.0
+    def _init_totals(self):
+        return {"cell_counts": [], "cell_area_means": [], "lipid_occupancies": [], "total_production_ratios": [], "intracellular_lipid_percents": [], "lipid_positive_cell_ratios": [], "lipid_positive_cells": [],
+                "necrosis_positive_cells": [], "necrosis_positive_cell_ratios": []}
 
-            summary_log_lines.append(f"   [平均]     細胞数 : {avg_cells:.1f} 個")
-            summary_log_lines.append(f"   [標準偏差] 細胞数 : {sd_cells:.2f}")
-            summary_log_lines.append(f"   [平均]     細胞平均面積 : {avg_cell_area:.2f} px")
-            summary_log_lines.append(f"   [標準偏差] 細胞平均面積 : {sd_cell_area:.2f}")
+    def _read_img(self, n):
+        p = os.path.join(self.target_path, n)
+        return cv2.imdecode(np.fromfile(p, dtype=np.uint8), cv2.IMREAD_UNCHANGED) if os.path.exists(p) else None
 
-            summary_stat_row.update({
-                "細胞数": avg_cells,
-                "細胞数標準偏差": sd_cells,
-                "細胞平均面積(px)": avg_cell_area,
-                "細胞平均面積標準偏差": sd_cell_area
-            })
-
-        if run_lipid:
-            avg_occ = float(np.mean(totals["lipid_occupancies"])) if totals["lipid_occupancies"] else 0.0
-            sd_occ = float(np.std(totals["lipid_occupancies"], ddof=1)) if len(totals["lipid_occupancies"]) > 1 else 0.0
-            avg_prod = float(np.mean(totals["total_production_ratios"])) if totals["total_production_ratios"] else 0.0
-            avg_dist = float(np.mean(totals["intracellular_lipid_percents"])) * 100 if totals["intracellular_lipid_percents"] else 0.0
-            avg_lipid_positive_cell_count = float(np.mean(totals["lipid_positive_cells"])) if totals["lipid_positive_cells"] else 0.0
-            avg_lipid_positive_cell_ratio = float(np.mean(totals["lipid_positive_cell_ratios"])) * 100 if totals["lipid_positive_cell_ratios"] else 0.0
-            sd_lipid_positive_cell_ratio = (
-                float(np.std(totals["lipid_positive_cell_ratios"], ddof=1)) * 100
-                if len(totals["lipid_positive_cell_ratios"]) > 1 else 0.0
-            )
-
-            summary_log_lines.append(f"   [平均]     油脂占有率 : {avg_occ:.4f}")
-            summary_log_lines.append(f"   [標準偏差] 油脂占有率 : {sd_occ:.4f}")
-            summary_log_lines.append(f"   [平均] 総生産率       : {avg_prod:.4f}")
-            summary_log_lines.append(f"   [平均] 細胞内油脂割合 : {avg_dist:.1f}%")
-            summary_log_lines.append(f"   [平均] 油脂保有細胞数 : {avg_lipid_positive_cell_count:.1f} 個")
-            summary_log_lines.append(f"   [平均] 油脂保有細胞割合 : {avg_lipid_positive_cell_ratio:.1f}%")
-            summary_log_lines.append(f"   [標準偏差] 油脂保有細胞割合 : {sd_lipid_positive_cell_ratio:.2f}")
-
-            summary_stat_row.update({
-                "油脂占有率": avg_occ,
-                "油脂占有率標準偏差": sd_occ,
-                "総生産率": avg_prod,
-                "細胞内油脂割合(%)": avg_dist,
-                "油脂保有細胞数": avg_lipid_positive_cell_count,
-                "油脂保有細胞割合(%)": avg_lipid_positive_cell_ratio,
-                "油脂保有細胞割合標準偏差": sd_lipid_positive_cell_ratio
-            })
-
-        if run_necrosis:
-            avg_necrosis_positive_cell_count = float(np.mean(totals["necrosis_positive_cells"])) if totals["necrosis_positive_cells"] else 0.0
-            avg_necrosis_positive_cell_ratio = float(np.mean(totals["necrosis_positive_cell_ratios"])) * 100 if totals["necrosis_positive_cell_ratios"] else 0.0
-            sd_necrosis_positive_cell_ratio = (
-                float(np.std(totals["necrosis_positive_cell_ratios"], ddof=1)) * 100
-                if len(totals["necrosis_positive_cell_ratios"]) > 1 else 0.0
-            )
-
-            summary_log_lines.append(f"   [平均] 壊死細胞数 : {avg_necrosis_positive_cell_count:.1f} 個")
-            summary_log_lines.append(f"   [平均] 壊死細胞割合 : {avg_necrosis_positive_cell_ratio:.1f}%")
-            summary_log_lines.append(f"   [標準偏差] 壊死細胞割合 : {sd_necrosis_positive_cell_ratio:.2f}")
-
-            summary_stat_row.update({
-                "壊死細胞数": avg_necrosis_positive_cell_count,
-                "壊死細胞割合(%)": avg_necrosis_positive_cell_ratio,
-                "壊死細胞割合標準偏差": sd_necrosis_positive_cell_ratio
-            })
-
-        summary_log_lines.append("-" * 40)
-        summary_log_lines.append(f"解析結果保存先: {output_dir}")
-
-        summary_rows.append(summary_stat_row)
-
-        pd.DataFrame(summary_rows).to_csv(
-            os.path.join(output_dir, "analysis_summary.csv"),
-            index=False,
-            encoding="utf-8-sig"
-        )
-
-        self.update_status(
-            "\n".join(summary_log_lines),
-            1.0,
-            highlight_text=output_dir,
-            enable_start_button=True
-        )
-
-    def run_analysis(self, run_cell, run_lipid, run_necrosis, memo_text):
-        try:
-            self.prepare_analyzer()
-            self.get_models(run_cell, run_lipid, run_necrosis)
-
-            bf_suffix = str(self.config_data.get("bf_suffix", "")).strip()
-            fl_suffix = str(self.config_data.get("fl_suffix", "")).strip()
-            pi_suffix = str(self.config_data.get("pi_suffix", "")).strip()
-
-            files, bf_files, bf_suffix_lower = self.collect_image_files(bf_suffix)
-
-            if not bf_files:
-                self.handle_no_bf_images(files, bf_suffix)
-                return
-
-            output_dir = self.create_output_directory(memo_text)
-            total_files = len(bf_files)
-
-            prefix_map = {
-                "cell": "01_",
-                "lipid_clean": "00_clean_",
-                "lipid": "02_",
-                "combined": "03_",
-                "necrosis_clean": "00_clean_",
-                "necrosis": "02_",
-                "combined_necrosis": "03_"
-            }
-
-            summary_rows = []
-            totals = {
-                "sum_occ": 0.0,
-                "sum_prod": 0.0,
-                "sum_cells": 0,
-                "sum_in_pct": 0.0,
-                "sum_lipid_positive_cells": 0,
-                "sum_lipid_positive_cell_ratio": 0.0,
-                "sum_necrosis_positive_cells": 0,
-                "sum_necrosis_positive_cell_ratio": 0.0,
-                "cell_counts": [],
-                "cell_area_means": [],
-                "lipid_occupancies": [],
-                "total_production_ratios": [],
-                "intracellular_lipid_percents": [],
-                "lipid_positive_cells": [],
-                "lipid_positive_cell_ratios": [],
-                "necrosis_positive_cells": [],
-                "necrosis_positive_cell_ratios": []
-            }
-            processed_count = 0
-
-            self.update_log(self.build_start_log(total_files, run_lipid, run_necrosis))
-
-            for index, bf_name in enumerate(bf_files):
-                if self.cancel_requested:
-                    self.update_log("⚠ ユーザー操作により解析が中止されました。")
-                    break
-
-                row = self.analyze_single_image(
-                    index,
-                    total_files,
-                    bf_name,
-                    bf_suffix,
-                    bf_suffix_lower,
-                    fl_suffix,
-                    pi_suffix,
-                    run_cell,
-                    run_lipid,
-                    run_necrosis,
-                    output_dir,
-                    prefix_map,
-                    totals
-                )
-
-                if row is None:
-                    continue
-
-                summary_rows.append(row)
-                processed_count += 1
-
-            self.write_summary(
-                summary_rows,
-                totals,
-                processed_count,
-                run_cell,
-                run_lipid,
-                run_necrosis,
-                output_dir
-            )
-
-        except Exception as e:
-            self.update_status(
-                f"エラー: {e}",
-                enable_start_button=True
-            )
-            self.show_error("エラー", str(e))
-
-    def get_analyzer_signature(self):
-        return (
-            self._normalize_path_signature(self.config_data.get("cell_model_path")),
-            self._normalize_path_signature(self.config_data.get("lipid_model_path")),
-            self._normalize_path_signature(self.config_data.get("necrosis_model_path")),
-            self.config_data.get("use_gpu"),
-        )
+    def _get_preview_key(self, run_l, run_n, p_type):
+        if run_n: return {"clean": "necrosis_clean", "mask": "necrosis"}.get(p_type, "combined_necrosis")
+        if run_l: return {"clean": "lipid_clean", "mask": "lipid"}.get(p_type, "combined")
+        return "cell"
 
     def prepare_analyzer(self):
-        self.update_log(f"設定ファイルを読み込み中: {self.config_data.config_dir}")
-        if not self.config_data.load_config():
-            self.update_log("警告: 設定CSVの読み込みに失敗したため、前回またはデフォルト設定を使用します。")
-
-        from app.core.analyzer import YeastAnalyzer
-
-        signature = self.get_analyzer_signature()
-
-        if self.analyzer is None or self.analyzer_signature != signature:
-            self.update_log_sync("解析エンジンの準備を完了しました。（解析開始時に必要なモデルを自動ロードします）")
-            try:
-                # ログ・コールバック（update_log）を渡してインスタンス化
-                analyzer = YeastAnalyzer(self.config_data, log_callback=self.update_log)
-            except Exception as e:
-                raise RuntimeError(f"解析エンジンのセットアップに失敗しました: {e}") from e
-
-            self.analyzer = analyzer
-            self.analyzer_signature = signature
-        else:
-            self.analyzer.cfg = self.config_data
-
-    @staticmethod
-    def _normalize_path_signature(path):
-        if not path:
-            return ""
-        return os.path.abspath(os.path.normpath(str(path)))
+        self.config_data.load_config()
+        if not self.analyzer: self.analyzer = YeastAnalyzer(self.config_data, log_callback=self.queue_log)
