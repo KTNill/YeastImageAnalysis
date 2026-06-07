@@ -105,6 +105,7 @@ class App(ctk.CTk):
         self.log_text.tag_config("log_line_spacing", spacing3=5)
         self.log_text.tag_config("filename", foreground="#4DA3FF")
         self.log_text.tag_config("summary_title", foreground="#FFD166")
+        self.log_text.tag_config("warning", foreground="#FF6B6B")  # 警告表示用の明るい赤色を追加
 
         # 進捗バー
         self.progressbar = ctk.CTkProgressBar(self)
@@ -211,6 +212,16 @@ class App(ctk.CTk):
                     found_end = f"{found_index}+{len(text)}c"
                     self.log_text.tag_add("filename", found_index, found_end)
                     search_start = found_end
+
+        # 警告マーク（⚠）のある箇所を行末まで警告色（赤色）に設定する
+        search_start = start_index
+        while True:
+            found_index = self.log_text.search("⚠", search_start, stopindex="end")
+            if not found_index:
+                break
+            found_end = f"{found_index} lineend"
+            self.log_text.tag_add("warning", found_index, found_end)
+            search_start = f"{found_index}+1c"
 
         highlighted_titles = [
             "【 全画像 統計サマリー 】",
@@ -547,6 +558,8 @@ class App(ctk.CTk):
 
             if cells > 0:
                 totals["cell_area_means"].append(area / cells)
+            else:
+                log_lines.append("   ⚠ 細胞数が0のため、本画像の平均・比率データは全体統計の計算から除外されます。")
 
         if run_lipid:
             occ = stats.get("lipid_cell_ratio", 0.0)
