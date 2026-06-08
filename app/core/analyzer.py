@@ -3,6 +3,7 @@ import numpy as np
 import os
 import cv2
 import logging
+import gc
 from enum import Enum, auto
 from skimage.segmentation import find_boundaries
 
@@ -24,7 +25,7 @@ class YeastAnalyzer:
     def __init__(self, config, log_callback=None):
         self.logger = logging.getLogger(__name__)
         self.cfg = config
-        self.log_callback = log_callback  # (msg, category, metadata={})
+        self.log_callback = log_callback
 
         use_gpu = bool(config.get("use_gpu"))
         self.device_available = False
@@ -43,9 +44,17 @@ class YeastAnalyzer:
 
         self._log(f"解析デバイス: {self.device}")
 
+        # 重いモジュールのインポートは、インスタンス化時に一度だけ実行
+        from cellpose.models import CellposeModel
+        self.CellposeModel = CellposeModel
+
         self.cell_model = None
         self.lipid_model = None
         self.necrosis_model = None
+
+        self._current_cell_path = None
+        self._current_lipid_path = None
+        self._current_necrosis_path = None
 
     def _log(self, msg, category=LogCategory.NORMAL, metadata=None):
         self.logger.info(msg)
@@ -53,32 +62,52 @@ class YeastAnalyzer:
             self.log_callback(msg, category, metadata)
 
     def get_cell_model(self):
-        if self.cell_model is None:
-            self.cell_model = self._load_model(self.cfg.get("cell_model_path"), "cpsam", "細胞用")
+        path = self.cfg.get("cell_model_path")
+        if self.cell_model is None or path != self._current_cell_path:
+            self.cell_model = self._load_model(path, "cpsam", "細胞用")
+            self._current_cell_path = path
         return self.cell_model
 
     def get_lipid_model(self):
-        if self.lipid_model is None:
-            self.lipid_model = self._load_model(self.cfg.get("lipid_model_path"), "cpsam", "油脂用")
+        path = self.cfg.get("lipid_model_path")
+        if self.lipid_model is None or path != self._current_lipid_path:
+            self.lipid_model = self._load_model(path, "cpsam", "油脂用")
+            self._current_lipid_path = path
         return self.lipid_model
 
     def get_necrosis_model(self):
-        if self.necrosis_model is None:
-            self.necrosis_model = self._load_model(self.cfg.get("necrosis_model_path"), "cpsam", "壊死用")
+        path = self.cfg.get("necrosis_model_path")
+        if self.necrosis_model is None or path != self._current_necrosis_path:
+            self.necrosis_model = self._load_model(path, "cpsam", "壊死用")
+            self._current_necrosis_path = path
         return self.necrosis_model
 
     def _load_model(self, model_path, fallback_model, model_name):
         try:
-            from cellpose.models import CellposeModel
+            # 不要なメモリを事前に掃除しておく
+            gc.collect()
+            if self.device == "cuda":
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+
+            # ロード開始
             if model_path and os.path.exists(model_path):
                 self._log(f"【{model_name}】カスタムモデルをロードします: {model_path}", metadata={"path": model_path})
-                model = CellposeModel(gpu=self.device_available, pretrained_model=model_path)
-                self._log(f"【{model_name}】カスタムモデルのロードが完了しました。")
-                return model
+            else:
+                self._log(f"【{model_name}】デフォルトモデル（{fallback_model}）をロードします。")
 
-            self._log(f"【{model_name}】デフォルトモデル（{fallback_model}）をロードします。")
-            model = CellposeModel(gpu=self.device_available, model_type=fallback_model)
-            self._log(f"【{model_name}】デフォルトモデルのロードが完了しました。")
+            if model_path and os.path.exists(model_path):
+                model = self.CellposeModel(gpu=self.device_available, pretrained_model=model_path)
+            else:
+                model = self.CellposeModel(gpu=self.device_available, model_type=fallback_model)
+
+            if self.device == "cuda":
+                torch.cuda.synchronize()
+
+            # 完了
+            self._log(f"【{model_name}】ロードが完了しました。")
+            gc.collect()
+
             return model
         except Exception as e:
             self._log(f"【{model_name}】モデルの初期化失敗: {e}", LogCategory.ERROR)

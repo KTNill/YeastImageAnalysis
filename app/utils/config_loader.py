@@ -97,7 +97,7 @@ class ConfigLoader:
             f_path = os.path.join(self.config_dir, f_name)
             if not os.path.exists(f_path): self._create_default_csv(f_path, keys)
             try:
-                # 修正ポイント: dtype=str を指定して自動型推論を無効化する
+                # dtype=str を指定して自動型推論を無効化
                 df = pd.read_csv(f_path, encoding='utf-8-sig', dtype=str)
                 for jp_key in keys:
                     internal_key = self.KEY_MAP[jp_key]
@@ -122,7 +122,7 @@ class ConfigLoader:
         for f_name in files_to_update:
             f_path = os.path.join(self.config_dir, f_name)
             try:
-                # 修正ポイント: dtype=str を指定して自動型推論を無効化する
+                # dtype=str を指定して自動型推論を無効化
                 df = pd.read_csv(f_path, encoding='utf-8-sig', dtype=str)
                 for int_key, new_val in updates_dict.items():
                     jp_key = rev_map.get(int_key)

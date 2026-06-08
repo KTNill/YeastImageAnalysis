@@ -11,6 +11,7 @@ import subprocess
 import re
 import queue
 import shutil
+import time
 from app.core.analyzer import YeastAnalyzer, LogCategory
 
 # GUIの基本外観設定
@@ -188,7 +189,7 @@ class App(ctk.CTk):
             while True:
                 msg = self.msg_queue.get_nowait()
                 if msg["type"] == "log":
-                    self._append_log_to_widget(msg["text"], msg["category"], msg.get("metadata"))
+                    self._append_log_to_widget(msg["text"], msg["category"], msg.get("metadata"), msg.get("time"))
                 elif msg["type"] == "progress":
                     self.progressbar.set(msg["value"])
                 elif msg["type"] == "ui_state":
@@ -200,8 +201,10 @@ class App(ctk.CTk):
         finally:
             self.after(50, self.process_msg_queue)
 
-    def _append_log_to_widget(self, message, category, metadata=None):
-        timestamp = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] "
+    def _append_log_to_widget(self, message, category, metadata=None, log_time=None):
+        t_str = log_time if log_time else datetime.datetime.now().strftime('%H:%M:%S')
+        timestamp = f"[{t_str}] "
+
         start_idx = self.log_text.index("end-1c")
         prefix = "⚠ " if category == LogCategory.WARNING else "❌ " if category == LogCategory.ERROR else ""
         self.log_text.insert("end", f"{timestamp}{prefix}{message}\n")
@@ -233,7 +236,19 @@ class App(ctk.CTk):
         self.log_text.see("end")
 
     def queue_log(self, msg, category=LogCategory.NORMAL, metadata=None):
-        self.msg_queue.put({"type": "log", "text": msg, "category": category, "metadata": metadata})
+        """スレッドセーフなログ記録。UI層として、ワーカースレッドからの呼び出し時にGILを譲る責務を持つ"""
+        now_time = datetime.datetime.now().strftime('%H:%M:%S')
+        self.msg_queue.put({
+            "type": "log",
+            "text": msg,
+            "category": category,
+            "metadata": metadata,
+            "time": now_time
+        })
+
+        # ワーカースレッド（解析処理など）から呼ばれた場合のみ、一時停止してメインスレッド(GUI)に描画の隙間を与える
+        if threading.current_thread() is not threading.main_thread():
+            time.sleep(0.05)
 
     def _set_ui_state(self, is_running, mode=None):
         self.is_running = is_running
@@ -286,7 +301,6 @@ class App(ctk.CTk):
             if not self.target_path: self.select_folder()
             if not self.target_path: return
             self.msg_queue.put({"type": "ui_state", "state": True, "mode": "analysis"})
-            # ワーカースレッドをデーモン化
             threading.Thread(target=self.run_analysis_logic, args=(self.run_cell_var.get(), self.run_lipid_var.get(), self.run_necrosis_var.get(), self.memo_entry.get().strip()), daemon=True).start()
 
     def run_preview_thread(self):
@@ -297,7 +311,6 @@ class App(ctk.CTk):
         if not self.target_path: self.select_folder()
         if not self.target_path: return
         self.msg_queue.put({"type": "ui_state", "state": True, "mode": "preview"})
-        # ワーカースレッドをデーモン化
         threading.Thread(target=self.run_preview_logic, args=(self.run_cell_var.get(), self.run_lipid_var.get(), self.run_necrosis_var.get(), self.preview_target_var.get()), daemon=True).start()
 
     def run_analysis_logic(self, run_cell, run_lipid, run_necrosis, memo):
@@ -316,7 +329,6 @@ class App(ctk.CTk):
 
             out_dir = self._create_out_dir(memo)
 
-            # 設定ファイルのコピーを結果フォルダに保存
             try:
                 config_src_dir = self.config_data.config_dir
                 for f_name in os.listdir(config_src_dir):
@@ -363,6 +375,11 @@ class App(ctk.CTk):
     def run_preview_logic(self, run_cell, run_lipid, run_necrosis, p_type):
         try:
             self.prepare_analyzer()
+
+            if run_cell: self.analyzer.get_cell_model()
+            if run_lipid: self.analyzer.get_lipid_model()
+            if run_necrosis: self.analyzer.get_necrosis_model()
+
             bf_s, fl_s, pi_s = [str(self.config_data.get(k, "")).strip() for k in ["bf_suffix", "fl_suffix", "pi_suffix"]]
             bf_files = sorted([f for f in os.listdir(self.target_path) if bf_s.lower() in f.lower() and f.lower().endswith(self.IMAGE_EXTS)])
             if not bf_files: return
