@@ -1,1 +1,2 @@
 models/custom_cpsam_v1 filter=lfs diff=lfs merge=lfs -text
+models/custom_* filter=lfs diff=lfs merge=lfs -text
