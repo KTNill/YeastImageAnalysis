@@ -346,12 +346,12 @@ class App(ctk.CTk):
             if run_lipid or run_necrosis:
                 def_msg = "\n" + "=" * 70 + "\n定義確認:\n"
                 if run_lipid:
-                    def_msg += " 1. 油脂占有率 (蓄積度)   = 細胞内の油脂面積 / 細胞の総面積\n" \
-                               " 2. 油脂生産率 (効率)     = 全油脂面積 / 細胞の総面積\n" \
-                               " 3. 細胞内油脂割合 (分布) = (細胞内の油脂面積 / 全油脂面積) × 100\n" \
-                               " 4. 油脂保有細胞割合      = (油脂を含む細胞数 / 全体の細胞数) × 100\n"
+                    def_msg += " 1. 油脂占有率 (蓄積度)       = (細胞内の油脂面積 / 細胞の総面積) × 100\n" \
+                               " 2. 総生産率 (効率)           = (全油脂面積 / 細胞の総面積) × 100\n" \
+                               " 3. 油脂の細胞内局在率 (分布) = (細胞内の油脂面積 / 全油脂面積) × 100\n" \
+                               " 4. 油脂保有細胞割合          = (油脂を含む細胞数 / 全体の細胞数) × 100\n"
                 if run_necrosis:
-                    def_msg += " 1. 壊死細胞割合 = 壊死細胞数 / 全体の細胞数\n"
+                    def_msg += " 1. 壊死細胞割合 = (壊死細胞数 / 全体の細胞数) × 100\n"
                 def_msg += "=" * 70
                 self.queue_log(def_msg, LogCategory.EVENT_START)
 
@@ -449,12 +449,12 @@ class App(ctk.CTk):
                 log.append("⚠ 細胞数が0のため、本画像の平均データは除外されます。")
         if run_l:
             occ, prd, inp, lpcc, lpcr = [stats.get(k, 0.0) for k in ["lipid_cell_ratio", "total_production_ratio", "intracellular_lipid_percent", "lipid_positive_cell_count", "lipid_positive_cell_ratio"]]
-            log.append(f"   >>> 油脂占有率       : {occ:.4f}\n   >>> 総生産率         : {prd:.4f}\n   >>> 細胞内油脂割合   : {inp * 100:.1f}%\n   >>> 油脂保有細胞数   : {lpcc} 個\n   >>> 油脂保有細胞割合 : {lpcr * 100:.1f}%")
-            row.update({"油脂占有率": occ, "総生産率": prd, "細胞内油脂割合(%)": inp * 100, "油脂保有細胞数": lpcc, "油脂保有細胞割合(%)": lpcr * 100})
+            log.append(f"   >>> 油脂占有率       : {occ * 100:.2f}%\n   >>> 総生産率         : {prd * 100:.2f}%\n   >>> 油脂の細胞内局在率 : {inp * 100:.1f}%\n   >>> 油脂保有細胞数   : {lpcc} 個\n   >>> 油脂保有細胞割合 : {lpcr * 100:.1f}%")
+            row.update({"油脂占有率(%)": occ * 100, "総生産率(%)": prd * 100, "油脂の細胞内局在率(%)": inp * 100, "油脂保有細胞数": lpcc, "油脂保有細胞割合(%)": lpcr * 100})
             totals["lipid_positive_cells"].append(lpcc)
             if cells > 0:
-                totals["lipid_occupancies"].append(occ)
-                totals["total_production_ratios"].append(prd)
+                totals["lipid_occupancies"].append(occ * 100)
+                totals["total_production_ratios"].append(prd * 100)
                 totals["lipid_positive_cell_ratios"].append(lpcr)
             if stats.get("total_lipid_px", 0) > 0: totals["intracellular_lipid_percents"].append(inp)
         if run_n:
@@ -478,14 +478,19 @@ class App(ctk.CTk):
             avg_p, avg_i, avg_lpcc = np.mean(totals["total_production_ratios"]), np.mean(totals["intracellular_lipid_percents"]) * 100, np.mean(totals["lipid_positive_cells"])
             avg_lpcr, sd_lpcr = np.mean(totals["lipid_positive_cell_ratios"]) * 100, (np.std(totals["lipid_positive_cell_ratios"], ddof=1) * 100 if len(totals["lipid_positive_cell_ratios"]) > 1 else 0.0)
             sum_log.extend(
-                [f"   [平均]     油脂占有率 : {avg_o:.4f}", f"   [標準偏差] 油脂占有率 : {sd_o:.4f}", f"   [平均] 総生産率       : {avg_p:.4f}", f"   [平均] 細胞内油脂割合 : {avg_i:.1f}%", f"   [平均] 油脂保有細胞数 : {avg_lpcc:.1f} 個",
-                 f"   [平均] 油脂保有細胞割合 : {avg_lpcr:.1f}%", f"   [標準偏差] 油脂保有細胞割合 : {sd_lpcr:.2f}"])
-            stat_row.update({"油脂占有率": avg_o, "油脂占有率標準偏差": sd_o, "総生産率": avg_p, "細胞内油脂割合(%)": avg_i, "油脂保有細胞数": avg_lpcc, "油脂保有細胞割合(%)": avg_lpcr, "油脂保有細胞割合標準偏差": sd_lpcr})
+                [f"   [平均]     油脂占有率 : {avg_o:.2f}%",
+                 f"   [標準偏差] 油脂占有率 : {sd_o:.2f}%",
+                 f"   [平均] 総生産率           : {avg_p:.2f}%",
+                 f"   [平均] 油脂の細胞内局在率 : {avg_i:.1f}%",
+                 f"   [平均] 油脂保有細胞数     : {avg_lpcc:.1f} 個",
+                 f"   [平均] 油脂保有細胞割合   : {avg_lpcr:.1f}%",
+                 f"   [標準偏差] 油脂保有細胞割合 : {sd_lpcr:.2f}%"])
+            stat_row.update({"油脂占有率(%)": avg_o, "油脂占有率標準偏差(%)": sd_o, "総生産率(%)": avg_p, "油脂の細胞内局在率(%)": avg_i, "油脂保有細胞数": avg_lpcc, "油脂保有細胞割合(%)": avg_lpcr, "油脂保有細胞割合標準偏差(%)": sd_lpcr})
         if run_n and totals["necrosis_positive_cells"]:
             avg_n, avg_nr, sd_nr = np.mean(totals["necrosis_positive_cells"]), np.mean(totals["necrosis_positive_cell_ratios"]) * 100, (
                 np.std(totals["necrosis_positive_cell_ratios"], ddof=1) * 100 if len(totals["necrosis_positive_cell_ratios"]) > 1 else 0.0)
-            sum_log.extend([f"   [平均] 壊死細胞数 : {avg_n:.1f} 個", f"   [平均] 壊死細胞割合 : {avg_nr:.1f}%", f"   [標準偏差] 壊死細胞割合 : {sd_nr:.2f}"])
-            stat_row.update({"壊死細胞数": avg_n, "壊死細胞割合(%)": avg_nr, "壊死細胞割合標準偏差": sd_nr})
+            sum_log.extend([f"   [平均] 壊死細胞数 : {avg_n:.1f} 個", f"   [平均] 壊死細胞割合 : {avg_nr:.1f}%", f"   [標準偏差] 壊死細胞割合 : {sd_nr:.2f}%"])
+            stat_row.update({"壊死細胞数": avg_n, "壊死細胞割合(%)": avg_nr, "壊死細胞割合標準偏差(%)": sd_nr})
 
         sum_log.append("-" * 40)
         self.queue_log("\n".join(sum_log), LogCategory.EVENT_END)
