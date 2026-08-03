@@ -3,60 +3,48 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 REM ==================================================
-REM Google Drive Settings
+REM Settings
 REM ==================================================
-set "PYTHON_ENV_FILE_ID=https://drive.google.com/file/d/1FgzL3hbGCw8A8CmgOBdbmU6Q2FyisFD1/view?usp=drive_link"
+REM Official python-build-standalone URL (Python 3.12.5 / x86_64 / Windows / install_only)
+set "PYTHON_STANDALONE_URL=https://github.com/astral-sh/python-build-standalone/releases/download/20240814/cpython-3.12.5+20240814-x86_64-pc-windows-msvc-install_only.tar.gz"
 
+REM Hugging Face Model Settings
+set "HF_BASE_URL=https://huggingface.co/KTNill/yeast-cellpose-models/resolve/main"
 set "MODEL1_NAME=custom_cpsam_v1"
-set "MODEL1_FILE_ID=https://drive.google.com/file/d/1X09CtPsMeajxPSDlDFZGl2Wpy6IYbSo5/view?usp=drive_link"
-
+set "MODEL1_URL=%HF_BASE_URL%/custom_cpsam_v1"
 set "MODEL2_NAME=custom_cpsam_liqid_v4"
-set "MODEL2_FILE_ID=https://drive.google.com/file/d/1ibG7JEUxcQi5OmOEXIrs1Xtlczsz9Yl6/view?usp=drive_link"
+set "MODEL2_URL=%HF_BASE_URL%/custom_cpsam_liqid_v4"
 
 
 REM ==================================================
-REM 1. Check and Download python_env
+REM 1. Check and Download Python Standalone
 REM ==================================================
-if exist "%~dp0python_env\python.exe" goto :CHECK_MODELS
+if exist "%~dp0python_env\python.exe" goto :SETUP_ENV_DEPS
 
-echo [INFO] python_env not found.
-echo [INFO] Downloading python_env.zip from Google Drive...
+echo [INFO] Portable Python environment not found.
+echo [INFO] Downloading python-build-standalone (Python 3.12)...
 echo.
 
-call :DOWNLOAD_FILE "%PYTHON_ENV_FILE_ID%" "python_env_temp.zip"
+curl.exe -L -f -o "python_standalone.tar.gz" "%PYTHON_STANDALONE_URL%"
 
-if not exist "python_env_temp.zip" (
-    echo [ERROR] Download failed. Check your network or Google Drive link.
+if not exist "python_standalone.tar.gz" (
+    echo [ERROR] Download failed. Check your network connection.
     pause
     exit /b 1
 )
 
-REM Verify file is not empty
-for %%I in (python_env_temp.zip) do if %%~zI EQU 0 (
-    echo.
-    echo [ERROR] Downloaded file is empty.
-    echo [ERROR] Please check Google Drive sharing settings.
-    del /f /q python_env_temp.zip
-    echo.
-    pause
-    exit /b 1
-)
-
-echo [INFO] Extracting python_env.zip...
+echo [INFO] Extracting Python environment...
 mkdir "temp_env"
-tar -xf "python_env_temp.zip" -C "temp_env" >NUL 2>&1
-if errorlevel 1 (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path 'python_env_temp.zip' -DestinationPath 'temp_env' -Force"
-)
+tar -xzf "python_standalone.tar.gz" -C "temp_env"
 
-echo [INFO] Moving files...
-if exist "temp_env\python_env" (
-    move "temp_env\python_env" "python_env" >NUL
+echo [INFO] Setting up python_env directory...
+if exist "temp_env\python" (
+    move "temp_env\python" "python_env" >NUL
 ) else (
     move "temp_env" "python_env" >NUL
 )
 
-if exist "python_env_temp.zip" del /f /q "python_env_temp.zip"
+if exist "python_standalone.tar.gz" del /f /q "python_standalone.tar.gz"
 if exist "temp_env" rmdir /s /q "temp_env"
 
 if not exist "%~dp0python_env\python.exe" (
@@ -64,8 +52,26 @@ if not exist "%~dp0python_env\python.exe" (
     pause
     exit /b 1
 )
-echo [SUCCESS] python_env setup completed successfully.
+echo [SUCCESS] Standalone Python setup completed.
 echo.
+
+
+:SETUP_ENV_DEPS
+REM ==================================================
+REM 1.5. Install Pip & Dependencies
+REM ==================================================
+if exist "%~dp0python_env\Scripts\pip.exe" goto :INSTALL_REQS
+
+echo [INFO] Installing pip...
+curl.exe -L -f -o "get-pip.py" "https://bootstrap.pypa.io/get-pip.py"
+"%~dp0python_env\python.exe" "get-pip.py"
+if exist "get-pip.py" del /f /q "get-pip.py"
+
+:INSTALL_REQS
+if not exist "%~dp0requirements.txt" goto :CHECK_MODELS
+
+echo [INFO] Installing / Verifying dependencies from requirements.txt...
+"%~dp0python_env\python.exe" -m pip install -r "%~dp0requirements.txt" --extra-index-url https://download.pytorch.org/whl/cu118
 
 
 :CHECK_MODELS
@@ -79,14 +85,14 @@ echo [INFO] Downloading initial model files...
 echo.
 mkdir "models"
 
-if not "%MODEL1_FILE_ID%"=="" (
+if defined MODEL1_URL (
     echo [INFO] Downloading %MODEL1_NAME%...
-    call :DOWNLOAD_FILE "%MODEL1_FILE_ID%" "models\%MODEL1_NAME%"
+    curl.exe -L -f -o "models\%MODEL1_NAME%" "%MODEL1_URL%"
 )
 
-if not "%MODEL2_FILE_ID%"=="" (
+if defined MODEL2_URL (
     echo [INFO] Downloading %MODEL2_NAME%...
-    call :DOWNLOAD_FILE "%MODEL2_FILE_ID%" "models\%MODEL2_NAME%"
+    curl.exe -L -f -o "models\%MODEL2_NAME%" "%MODEL2_URL%"
 )
 
 echo.
@@ -101,34 +107,18 @@ REM ==================================================
 echo [INFO] Starting Yeast Image Analysis System...
 echo [INFO] (GPU initialization may take a few seconds)
 
-REM --- GTX 950M Override Flags ---
+set "PYTHONPATH=%~dp0"
+
 set CUDA_VISIBLE_DEVICES=0
 set NVIDIA_TF32_OVERRIDE=0
 set TORCH_CUDNN_V8_API_ENABLED=1
-REM --------------------------------
 
 "%~dp0python_env\python.exe" "%~dp0main.py"
 
-if %errorlevel% neq 0 (
+if errorlevel 1 (
     echo.
     echo [ERROR] Application exited abnormally.
     pause
 )
 
-exit /b 0
-
-
-REM ==================================================
-REM Helper Subroutine: Download File via Windows curl
-REM ==================================================
-:DOWNLOAD_FILE
-set "URL_INPUT=%~1"
-set "OUT_INPUT=%~2"
-
-REM Extract Google Drive File ID automatically
-set "TMP_ID=!URL_INPUT:*file/d/=!"
-for /f "delims=/?" %%A in ("!TMP_ID!") do set "EXTRACTED_ID=%%A"
-
-REM Download using Windows built-in curl.exe
-curl.exe -L -f -o "%OUT_INPUT%" "https://drive.usercontent.google.com/download?id=!EXTRACTED_ID!&export=download&confirm=t"
 exit /b 0
