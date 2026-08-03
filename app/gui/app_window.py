@@ -1,3 +1,7 @@
+# YeastImageAnalysis
+# Copyright (c) 2026 KT Nill
+# This program is free software under the terms of the GNU GPL v3.
+
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import os
