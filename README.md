@@ -169,11 +169,19 @@ sample01_PI.tif  (壊死用: 任意)
 
 #### 2. 中間・出力ファイル (Generated Images)
 
-| 加工処理済画像 (中間) | 細胞マスク画像 (中間) | 油脂マスク画像 (中間) | マージ画像 (最終出力) |
-|:---:| :---: | :---: | :---: |
-| ![中間: 加工処理済画像](images/output_edited.png) | ![中間: 細胞マスク](images/output_cell.png) | ![中間: 油脂マスク](images/output_liquid.png) | ![出力: マージ統合画像](images/output_combined.png) |
-|  `images/output_edited.png`<br>(加工処理結果)  | `images/output_cell.png`<br>(細胞検出結果) | `images/output_liquid.png`<br>(油脂検出結果) | `images/output_combined.png`<br>(**※赤枠: 油脂が含まれていない細胞**) |
+##### ■ 中間ファイル (Intermediate Files)
 
+| 加工処理済画像 | 細胞マスク画像 | 油脂マスク画像 |
+| :---: | :---: | :---: |
+| ![中間: 加工処理済画像](images/output_edited.png) | ![中間: 細胞マスク](images/output_cell.png) | ![中間: 油脂マスク](images/output_liquid.png) |
+| `images/output_edited.png`<br>(前処理結果) | `images/output_cell.png`<br>(細胞検出結果) | `images/output_liquid.png`<br>(油脂検出結果) |
+
+##### ■ 最終出力ファイル (Final Output Images)
+
+| マージ画像 (統合結果) |
+| :---: |
+| ![出力: マージ統合画像](images/output_combined.png) |
+| `images/output_combined.png`<br>(**マスク画像マージ結果※赤枠: 油脂が含まれていない細胞**) |
 ※ 1枚テストプレビュー実行時は、プレビュー表示対象に応じた画像（`output_combined.tif` など）がOS既定の画像ビューアで表示されます。
 
 ## 解析結果
