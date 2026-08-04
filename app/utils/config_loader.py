@@ -9,19 +9,19 @@ import logging
 
 class ConfigLoader:
     """
-    解析設定を複数のCSV（共通、細胞、油脂、壊死）からロード・保存し、管理するクラス。
+    解析設定を複数のCSV（共通、細胞、油脂、死細胞）からロード・保存し、管理するクラス。
     """
     CONFIG_SCHEMA = {
         # 共通設定 (config_common.csv)
         "透過光画像識別子": {"default": "_BF", "desc": "透過光（細胞用）画像のファイル名末尾（例: img01_BF.jpg）", "file": "config_common.csv"},
         "蛍光画像識別子": {"default": "_FL", "desc": "蛍光（油脂用）画像のファイル名末尾（例: img01_FL.jpg）", "file": "config_common.csv"},
-        "PI蛍光画像識別子": {"default": "_PI", "desc": "PI蛍光（壊死用）画像のファイル名末尾（例: img01_PI.jpg）", "file": "config_common.csv"},
+        "PI蛍光画像識別子": {"default": "_PI", "desc": "PI蛍光（死細胞用）画像のファイル名末尾（例: img01_PI.jpg）", "file": "config_common.csv"},
         "GPU使用": {"default": 1.0, "desc": "1でグラフィックボード（GPU）を使用して高速化、0で通常CPUを使用", "file": "config_common.csv"},
         "統合画像：細胞境界色": {"default": "255,255,255", "desc": "細胞枠の色。指定例: 255,255,255 または #FFFFFF", "file": "config_common.csv"},
         "統合画像：油脂色": {"default": "", "desc": "油脂の色。空欄でランダム。指定例: 0,255,255", "file": "config_common.csv"},
-        "統合画像：壊死色": {"default": "", "desc": "壊死細胞の色。空欄でランダム. 指定例: 255,0,255", "file": "config_common.csv"},
+        "統合画像：死細胞色": {"default": "", "desc": "死細胞の色。空欄でランダム. 指定例: 255,0,255", "file": "config_common.csv"},
         "統合画像：油脂なし細胞強調": {"default": 1.0, "desc": "1で油脂を持たない細胞を赤い太枠で強調表示、0で無効", "file": "config_common.csv"},
-        "統合画像：生細胞強調": {"default": 1.0, "desc": "1で壊死していない細胞を赤い太枠で強調表示、0で無効", "file": "config_common.csv"},
+        "統合画像：生細胞強調": {"default": 1.0, "desc": "1で死細胞していない細胞を赤い太枠で強調表示、0で無効", "file": "config_common.csv"},
 
         # 細胞解析設定 (config_cell.csv)
         "細胞モデルパス": {"default": "models/custom_cpsam_v1", "desc": "細胞認識用Cellposeモデルのパス（空欄はデフォルトを使用）", "file": "config_cell.csv"},
@@ -44,19 +44,19 @@ class ConfigLoader:
         "油脂輝度上限カット": {"default": 100.0, "desc": "指定値（0～255）で明るさを頭打ちにし、薄い油脂の埋没を防ぎます。", "file": "config_lipid.csv"},
         "油脂ノイズぼかし幅": {"default": 2.0, "desc": "ノイズカットの境界を滑らかにする幅。0で無効。", "file": "config_lipid.csv"},
 
-        # 壊死解析設定 (config_necrosis.csv)
-        "壊死モデルパス": {"default": "", "desc": "壊死細胞用モデルパス（空欄はデフォルトを使用）", "file": "config_necrosis.csv"},
-        "壊死径": {"default": 0.0, "desc": "壊死細胞の直径(px)。0で自動。", "file": "config_necrosis.csv"},
-        "壊死フロー閾値": {"default": 0.0, "desc": "形の制限。0で不問。", "file": "config_necrosis.csv"},
-        "壊死確率閾値": {"default": -2.0, "desc": "敏感さ。マイナスにするほど壊死と見なしやすくなります。", "file": "config_necrosis.csv"},
-        "壊死最小サイズ": {"default": 5.0, "desc": "これより小さい面積のゴミを無視します。", "file": "config_necrosis.csv"},
-        "壊死マスク色": {"default": "", "desc": "壊死細胞の描画色。空欄でランダム。", "file": "config_necrosis.csv"},
-        "壊死ノイズカット閾値": {"default": 5.0, "desc": "この値以下の明るさ（0～255）を黒にします。", "file": "config_necrosis.csv"},
-        "壊死平均輝度閾値": {"default": 15.0, "desc": "壊死領域の平均の明るさがこの値未満なら除外します。", "file": "config_necrosis.csv"},
-        "壊死最小重複割合": {"default": 0.25, "desc": "細胞面積に対する重複割合（0〜1.0）。この値以上被れば壊死と判定。", "file": "config_necrosis.csv"},
-        "壊死ガンマ補正": {"default": 1.0, "desc": "ガンマ補正値。1.0で無効。", "file": "config_necrosis.csv"},
-        "壊死輝度上限カット": {"default": 255.0, "desc": "輝度上限値。255.0で無効。", "file": "config_necrosis.csv"},
-        "壊死ノイズぼかし幅": {"default": 0.0, "desc": "ノイズカットの境界ぼかし。0で無効。", "file": "config_necrosis.csv"},
+        # 死細胞解析設定 (config_necrosis.csv)
+        "死細胞モデルパス": {"default": "", "desc": "死細胞用モデルパス（空欄はデフォルトを使用）", "file": "config_necrosis.csv"},
+        "死細胞径": {"default": 0.0, "desc": "死細胞の直径(px)。0で自動。", "file": "config_necrosis.csv"},
+        "死細胞フロー閾値": {"default": 0.0, "desc": "形の制限。0で不問。", "file": "config_necrosis.csv"},
+        "死細胞確率閾値": {"default": -2.0, "desc": "敏感さ。マイナスにするほど死細胞と見なしやすくなります。", "file": "config_necrosis.csv"},
+        "死細胞最小サイズ": {"default": 5.0, "desc": "これより小さい面積のゴミを無視します。", "file": "config_necrosis.csv"},
+        "死細胞マスク色": {"default": "", "desc": "死細胞の描画色。空欄でランダム。", "file": "config_necrosis.csv"},
+        "死細胞ノイズカット閾値": {"default": 5.0, "desc": "この値以下の明るさ（0～255）を黒にします。", "file": "config_necrosis.csv"},
+        "死細胞平均輝度閾値": {"default": 15.0, "desc": "死細胞領域の平均の明るさがこの値未満なら除外します。", "file": "config_necrosis.csv"},
+        "死細胞最小重複割合": {"default": 0.25, "desc": "細胞面積に対する重複割合（0〜1.0）。この値以上被れば死細胞と判定。", "file": "config_necrosis.csv"},
+        "死細胞ガンマ補正": {"default": 1.0, "desc": "ガンマ補正値。1.0で無効。", "file": "config_necrosis.csv"},
+        "死細胞輝度上限カット": {"default": 255.0, "desc": "輝度上限値。255.0で無効。", "file": "config_necrosis.csv"},
+        "死細胞ノイズぼかし幅": {"default": 0.0, "desc": "ノイズカットの境界ぼかし。0で無効。", "file": "config_necrosis.csv"},
     }
 
     KEY_MAP = {
@@ -66,12 +66,12 @@ class ConfigLoader:
         "油脂確率閾値": "lipid_cellprob_threshold", "油脂最小サイズ": "lipid_min_size", "油脂マスク色": "lipid_color",
         "油脂ノイズカット閾値": "fl_noise_cutoff", "油脂平均輝度閾値": "fl_intensity_threshold",
         "油脂ガンマ補正": "fl_gamma", "油脂輝度上限カット": "fl_intensity_clip", "油脂ノイズぼかし幅": "fl_noise_fade_width",
-        "壊死モデルパス": "necrosis_model_path", "壊死径": "necrosis_diameter", "壊死フロー閾値": "necrosis_flow_threshold",
-        "壊死確率閾値": "necrosis_cellprob_threshold", "壊死最小サイズ": "necrosis_min_size", "壊死マスク色": "necrosis_color",
-        "壊死ノイズカット閾値": "pi_noise_cutoff", "壊死平均輝度閾値": "pi_intensity_threshold",
-        "壊死最小重複割合": "necrosis_overlap_ratio", "壊死ガンマ補正": "pi_gamma", "壊死輝度上限カット": "pi_intensity_clip",
-        "壊死ノイズぼかし幅": "pi_noise_fade_width", "統合画像：細胞境界色": "combined_cell_color",
-        "統合画像：油脂色": "combined_lipid_color", "統合画像：壊死色": "combined_necrosis_color",
+        "死細胞モデルパス": "necrosis_model_path", "死細胞径": "necrosis_diameter", "死細胞フロー閾値": "necrosis_flow_threshold",
+        "死細胞確率閾値": "necrosis_cellprob_threshold", "死細胞最小サイズ": "necrosis_min_size", "死細胞マスク色": "necrosis_color",
+        "死細胞ノイズカット閾値": "pi_noise_cutoff", "死細胞平均輝度閾値": "pi_intensity_threshold",
+        "死細胞最小重複割合": "necrosis_overlap_ratio", "死細胞ガンマ補正": "pi_gamma", "死細胞輝度上限カット": "pi_intensity_clip",
+        "死細胞ノイズぼかし幅": "pi_noise_fade_width", "統合画像：細胞境界色": "combined_cell_color",
+        "統合画像：油脂色": "combined_lipid_color", "統合画像：死細胞色": "combined_necrosis_color",
         "統合画像：油脂なし細胞強調": "highlight_lipid_negative_cells",
         "統合画像：生細胞強調": "highlight_necrosis_negative_cells",
         "透過光画像識別子": "bf_suffix", "蛍光画像識別子": "fl_suffix", "PI蛍光画像識別子": "pi_suffix", "GPU使用": "use_gpu"

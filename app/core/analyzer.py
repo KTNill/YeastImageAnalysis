@@ -23,7 +23,7 @@ class LogCategory(Enum):
 
 class YeastAnalyzer:
     """
-    透過光(BF)、蛍光(FL)、PI蛍光(PI)画像を解析し、細胞数および油脂・壊死細胞の分布を定量化する。
+    透過光(BF)、蛍光(FL)、PI蛍光(PI)画像を解析し、細胞数および油脂・死細胞の分布を定量化する。
     """
 
     def __init__(self, config, log_callback=None):
@@ -82,7 +82,7 @@ class YeastAnalyzer:
     def get_necrosis_model(self):
         path = self.cfg.get("necrosis_model_path")
         if self.necrosis_model is None or path != self._current_necrosis_path:
-            self.necrosis_model = self._load_model(path, "cpsam", "壊死用")
+            self.necrosis_model = self._load_model(path, "cpsam", "死細胞用")
             self._current_necrosis_path = path
         return self.necrosis_model
 
@@ -233,7 +233,7 @@ class YeastAnalyzer:
                 highlight_flag=bool(self.cfg.get("highlight_lipid_negative_cells", 1.0))
             )
 
-        # 4. 壊死解析
+        # 4. 死細胞解析
         necrosis_masks = None
         if run_necrosis and pi_image is not None:
             if progress_callback: progress_callback(0.7)
@@ -253,7 +253,7 @@ class YeastAnalyzer:
             results["total_necrosis_px"] = int(np.sum(necrosis_masks > 0))
             visuals["necrosis"] = self._draw_masks(pi_image, necrosis_masks, False, self.cfg.get("necrosis_color"), salt=300)
 
-        # 5. 統合解析（壊死）
+        # 5. 統合解析（死細胞）
         if run_cell and run_necrosis and cell_masks is not None and necrosis_masks is not None:
             cell_count = int(results.get("cell_count", 0))
             necrosis_overlap_ratio = float(self.cfg.get("necrosis_overlap_ratio", 0.0))

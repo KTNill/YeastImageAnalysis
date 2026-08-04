@@ -129,7 +129,7 @@ class App(ctk.CTk):
         self.input_widgets = [self.select_button, self.memo_entry, self.common_gear]
         self._add_analysis_row(4, "細胞解析 (BF)", "run_cell_var", self.on_cell_check_changed, "細胞解析", "config_cell.csv", True)
         self._add_analysis_row(5, "油脂解析 (FL)", "run_lipid_var", self.on_lipid_check_changed, "油脂解析", "config_lipid.csv", True)
-        self._add_analysis_row(6, "壊死解析 (PI)", "run_necrosis_var", self.on_necrosis_check_changed, "壊死解析", "config_necrosis.csv", False)
+        self._add_analysis_row(6, "死細胞解析 (PI)", "run_necrosis_var", self.on_necrosis_check_changed, "死細胞解析", "config_necrosis.csv", False)
 
         self.preview_frame = ctk.CTkFrame(self.sidebar_frame)
         self.preview_frame.grid(row=7, column=0, padx=20, pady=10, sticky="ew")
@@ -351,7 +351,7 @@ class App(ctk.CTk):
                                " 3. 油脂の細胞内局在率 [%] = (細胞内の油脂面積 / 全油脂の総面積) × 100\n" \
                                " 4. 油脂保有細胞割合 [%]   = (油脂を保有する細胞数 / 全細胞数) × 100\n"
                 if run_necrosis:
-                    def_msg += " 1. 壊死細胞割合 [%]       = (壊死細胞数 / 全細胞数) × 100\n"
+                    def_msg += " 1. 死細胞割合 [%]       = (死細胞数 / 全細胞数) × 100\n"
                 def_msg += "=" * 70
                 self.queue_log(def_msg, LogCategory.EVENT_START)
 
@@ -424,7 +424,7 @@ class App(ctk.CTk):
             pi_n = f"{stem[:-len(bf_s)]}{pi_s}{ext}"
             img_pi = self._read_img(pi_n)
             if img_pi is None:
-                self.queue_log(f"警告: 壊死用画像が見つかりません。スキップします: {pi_n}", LogCategory.WARNING, metadata={"filename": pi_n});
+                self.queue_log(f"警告: 死細胞用画像が見つかりません。スキップします: {pi_n}", LogCategory.WARNING, metadata={"filename": pi_n});
                 return None
         if img_bf is None: return None
 
@@ -459,8 +459,8 @@ class App(ctk.CTk):
             if stats.get("total_lipid_px", 0) > 0: totals["intracellular_lipid_percents"].append(inp)
         if run_n:
             npcc, npcr = stats.get("necrosis_positive_cell_count", 0), stats.get("necrosis_positive_cell_ratio", 0.0)
-            log.append(f"   >>> 壊死細胞数       : {npcc} 個\n   >>> 壊死細胞割合     : {npcr * 100:.1f}%")
-            row.update({"壊死細胞数": npcc, "壊死細胞割合(%)": npcr * 100})
+            log.append(f"   >>> 死細胞数       : {npcc} 個\n   >>> 死細胞割合     : {npcr * 100:.1f}%")
+            row.update({"死細胞数": npcc, "死細胞割合(%)": npcr * 100})
             totals["necrosis_positive_cells"].append(npcc)
             if cells > 0: totals["necrosis_positive_cell_ratios"].append(npcr)
         self.queue_log("\n".join(log), LogCategory.NORMAL, metadata={"filename": name})
@@ -489,8 +489,8 @@ class App(ctk.CTk):
         if run_n and totals["necrosis_positive_cells"]:
             avg_n, avg_nr, sd_nr = np.mean(totals["necrosis_positive_cells"]), np.mean(totals["necrosis_positive_cell_ratios"]) * 100, (
                 np.std(totals["necrosis_positive_cell_ratios"], ddof=1) * 100 if len(totals["necrosis_positive_cell_ratios"]) > 1 else 0.0)
-            sum_log.extend([f"   [平均] 壊死細胞数 : {avg_n:.1f} 個", f"   [平均] 壊死細胞割合 : {avg_nr:.1f}%", f"   [標準偏差] 壊死細胞割合 : {sd_nr:.2f}%"])
-            stat_row.update({"壊死細胞数": avg_n, "壊死細胞割合(%)": avg_nr, "壊死細胞割合標準偏差(%)": sd_nr})
+            sum_log.extend([f"   [平均] 死細胞数 : {avg_n:.1f} 個", f"   [平均] 死細胞割合 : {avg_nr:.1f}%", f"   [標準偏差] 死細胞割合 : {sd_nr:.2f}%"])
+            stat_row.update({"死細胞数": avg_n, "死細胞割合(%)": avg_nr, "死細胞割合標準偏差(%)": sd_nr})
 
         sum_log.append("-" * 40)
         self.queue_log("\n".join(sum_log), LogCategory.EVENT_END)
