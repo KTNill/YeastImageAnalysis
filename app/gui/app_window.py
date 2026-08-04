@@ -90,7 +90,7 @@ class App(ctk.CTk):
         self.msg_queue = queue.Queue()
 
         self.protocol("WM_DELETE_WINDOW", self._hard_kill)
-        self.title("酵母・油脂 画像解析システム (Refactored)")
+        self.title("酵母・油脂 画像解析システム")
         self.geometry("1100x750")
 
         self.grid_columnconfigure(0, weight=0, minsize=320)
